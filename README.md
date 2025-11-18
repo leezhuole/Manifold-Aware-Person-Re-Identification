@@ -1,7 +1,4 @@
 # Manifold-Aware-Person-Re-Identification
-TLDR; We propose a Geometric Deep Learning framework for ReID. By utilizing Hyperbolic embeddings to resolve hierarchical crowding and Finsler manifolds (Randers metric) to model asymmetric retrieval, we develop Dual-Space architectures for robust, topology-faithful visual biometrics.
-
-## Project Description
 Standard Person Re-Identification (ReID) models operate under the assumption that visual feature spaces are inherently Euclidean. This project challenges that "flat" assumption, addressing the "crowding problem" where traditional models fail to preserve the latent hierarchical structure of human appearance data (e.g., Body $\rightarrow$ Part $\rightarrow$ Attribute), leading to performance degradation under occlusion and high uncertainty. 
 
 Our primary objective is to transition ReID architectures to Geometric Deep Learning frameworks utilizing Hyperbolic embeddings. leveraging manifolds with constant negative curvature (specifically Poincaré ball and Lorentz models), we aim to naturally embed these hierarchies with minimal distortion. We will develop Dual-Space architectures that synergize the stability of Euclidean space for texture representation with the structural capacity of hyperbolic space for identity discrimination. This includes the implementation of Hyperbolic Vision Transformers and geometric loss functions (e.g., CHEST) to maximize discriminative margins between similar identities. 
