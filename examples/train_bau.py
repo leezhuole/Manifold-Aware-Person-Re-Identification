@@ -144,7 +144,7 @@ def main_worker(args):
 
     # Initialize wandb if available
     if wandb is not None:
-        wandb.init(project='BAU', config=vars(args), name=f'BAU_{args.arch}_{args.target_dataset}_{manifold_name}_c{curvature}')
+        wandb.init(project='BAU', config=vars(args), name=f'BAU_{args.arch}_{args.target_dataset}_{manifold_name}_c{curvature}_{args.wandb_name_add}')
 
     # Organize dataset
     source_dataset = []
@@ -298,7 +298,7 @@ if __name__ == '__main__':
     parser.add_argument('--height', type=int, default=256, help='input height')
     parser.add_argument('--width', type=int, default=128, help='input width')
 
-    # path
+    # path  
     working_dir = osp.dirname(osp.abspath(__file__))
     # parser.add_argument('--data-dir', type=str, metavar='PATH', default=osp.join(working_dir, 'data'))
     parser.add_argument('--data-dir', type=str, metavar='PATH', default="/home/stud/leez/storage/user/reid/data")
@@ -328,4 +328,5 @@ if __name__ == '__main__':
     parser.add_argument('--manifold-aware', action='store_true', help='use manifold-aware distance computations (poincare ball)') 
     parser.add_argument('--curvature', type=float, default=1.0, help='manifold curvature (only used if manifold-aware is set)')
 
+    parser.add_argument('--wandb-name-add', type=str, default='', help='additional name info for wandb runs')
     main()

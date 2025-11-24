@@ -24,9 +24,10 @@ srun --unbuffered python examples/train_bau.py \
   -a resnet50 \
   -ds market1501 msmt17 cuhksysu \
   -dt cuhk03 \
-  -b  256 \
+  -b  128 \
   --lam 1.5 --k 10 --iters 500 \
   --logs-dir "/home/stud/leez/reid/src/BAU/examples/logs/m-ms-cs_c3" \
   --manifold-aware \
-  --curvature 1.0
+  --curvature 1.0 \
+  --wandb-name-add "chunk500"
   

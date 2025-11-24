@@ -63,6 +63,13 @@ class BAUTrainer(object):
                 f_w, f_s = f.chunk(2)
                 logits_w, _ = logits.chunk(2)
 
+            # # feedforward
+            # inputs = torch.cat([inputs_w, inputs_s], dim=0)
+            # emb, f, logits = self.model(inputs)
+            # emb_w, _ = emb.chunk(2)
+            # f_w, f_s = f.chunk(2)
+            # logits_w, _ = logits.chunk(2)
+
                 # compute weights
                 with torch.no_grad():
                     if self.manifold is None:
@@ -79,17 +86,37 @@ class BAUTrainer(object):
                     rows = torch.arange(nn.size(0)).unsqueeze(1).expand_as(topk)
                     nn[rows, topk] = 1
                     reciprocal = nn * nn.t() # b*b
-
                     reciprocal_w, reciprocal_s = reciprocal.chunk(2)
 
                     intersection = torch.matmul(reciprocal_s, reciprocal_w.t()) # b*b
                     union = reciprocal_s.sum(1,keepdim=True) + reciprocal_w.sum(1,keepdim=True).t() - intersection
                     weight = intersection / (union+1e-6) # b*b
 
+            # compute weights
+            # with torch.no_grad():
+            #     if self.manifold is None:
+            #         sims = torch.matmul(f, f.t()) # b*b
+            #     else:
+            #         # Use negative squared geodesic distances, mirroring poincare-embeddings.
+            #         sims = -self.manifold.dist(
+            #             f.unsqueeze(1),
+            #             f.unsqueeze(0),
+            #             dim=-1,
+            #         ).pow(2)
+            #     topk = torch.sort(sims, dim=1, descending=True).indices[:, :self.k] # b*k
+            #     nn = torch.zeros_like(sims).cuda()
+            #     rows = torch.arange(nn.size(0)).unsqueeze(1).expand_as(topk)
+            #     nn[rows, topk] = 1
+            #     reciprocal = nn * nn.t() # b*b
+            #     reciprocal_w, reciprocal_s = reciprocal.chunk(2)
+
+            #     intersection = torch.matmul(reciprocal_s, reciprocal_w.t()) # b*b
+            #     union = reciprocal_s.sum(1,keepdim=True) + reciprocal_w.sum(1,keepdim=True).t() - intersection
+            #     weight = intersection / (union+1e-6) # b*b
+
                 # loss
                 loss_ce = self.criterion_ce(logits_w, pids)
                 loss_tri = self.criterion_tri(emb_w, pids)
-
                 loss_align = self.align_loss(f_w, f_s, pids, weight)
                 loss_uniform = 0.5*(self.uniform_loss(f_w) + self.uniform_loss(f_s))
                 loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids) +
@@ -98,13 +125,31 @@ class BAUTrainer(object):
                 with torch.no_grad():
                     self.memory_bank.momentum_update(f_w, pids)
 
-                loss = loss_ce + loss_tri + self.lam * loss_align + loss_uniform + loss_domain
+            # loss
+            # loss_ce = self.criterion_ce(logits_w, pids)
+            # loss_tri = self.criterion_tri(emb_w, pids)
+            # loss_align = self.align_loss(f_w, f_s, pids, weight)
+            # loss_uniform = 0.5*(self.uniform_loss(f_w) + self.uniform_loss(f_s))
+            # loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids) +
+            #                    self.domain_loss(f_s, self.memory_bank.features, dids))
+
+            # with torch.no_grad():
+            #     self.memory_bank.momentum_update(f_w, pids)
+
+            loss = loss_ce + loss_tri + self.lam * loss_align + loss_uniform + loss_domain
+
+            if torch.isnan(loss):  # early exit if instability appears
+                msg = f"NaN loss detected at epoch {epoch}, iter {i}"
+                print(msg, flush=True)
+                raise RuntimeError(msg)
 
             # update
             self.scaler.scale(loss).backward()
             self.scaler.step(optimizer)
             self.scaler.update()
-
+            # loss.backward()
+            # optimizer.step()
+            
             # summing-up
             prec, = accuracy(logits.data, torch.cat([pids, pids]).data)
             losses_ce.update(loss_ce.item())
@@ -141,14 +186,14 @@ class BAUTrainer(object):
                     pass  # never let logging break training
 
             if (i + 1) % print_freq == 0:
-                    print(f'Epoch: {epoch} [{i + 1}/{iters}] \t'
-                          f' Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
-                          f' L_CE: {losses_ce.val:.3f} ({losses_ce.avg:.3f})  '
-                          f' L_Tri: {losses_tri.val:.3f} ({losses_tri.avg:.3f})  '
-                          f' L_Align: {losses_align.val:.3f} ({losses_align.avg:.3f})  '
-                          f' L_Uniform: {losses_uniform.val:.3f} ({losses_uniform.avg:.3f})  '
-                          f' L_Domain: {losses_domain.val:.3f} ({losses_domain.avg:.3f})  '
-                          f' Prec: {precisions.val:.2%} ({precisions.avg:.2%})')
+                print(f'Epoch: {epoch} [{i + 1}/{iters}] \t'
+                      f' Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
+                      f' L_CE: {losses_ce.val:.3f} ({losses_ce.avg:.3f})  '
+                      f' L_Tri: {losses_tri.val:.3f} ({losses_tri.avg:.3f})  '
+                      f' L_Align: {losses_align.val:.3f} ({losses_align.avg:.3f})  '
+                      f' L_Uniform: {losses_uniform.val:.3f} ({losses_uniform.avg:.3f})  '
+                      f' L_Domain: {losses_domain.val:.3f} ({losses_domain.avg:.3f})  '
+                      f' Prec: {precisions.val:.2%} ({precisions.avg:.2%})')
 
     def _parse_data(self, data):
         imgs_w, imgs_s, pids, dids, = data
@@ -203,7 +248,7 @@ class BAUTrainer(object):
         else:
             # Chunked computation to avoid OOM with large batch sizes
             dist = torch.zeros(m, n, device=f.device, dtype=f.dtype)
-            chunk_size = 1000  # Process 1000 classes at a time
+            chunk_size = 500  # Process 500 classes at a time
             for i in range(0, n, chunk_size):
                 end = min(i + chunk_size, n)
                 c_chunk = c[i:end]
