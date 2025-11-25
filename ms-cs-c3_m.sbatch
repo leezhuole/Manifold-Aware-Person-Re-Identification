@@ -18,7 +18,6 @@ mkdir -p logs
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate BAU   # or module load <python/conda>
 
-
 # Slurm already sets CUDA_VISIBLE_DEVICES for the allocated GPU
 srun --unbuffered python examples/train_bau.py \
   -a resnet50 \

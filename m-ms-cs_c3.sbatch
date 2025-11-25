@@ -18,16 +18,22 @@ mkdir -p logs
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate BAU   
 
+# Define variables
+BATCH_SIZE=64
+MANIFOLD_AWARE=True
+CHUNK_SIZE=500
 
 # Slurm already sets CUDA_VISIBLE_DEVICES for the allocated GPU
 srun --unbuffered python examples/train_bau.py \
   -a resnet50 \
   -ds market1501 msmt17 cuhksysu \
   -dt cuhk03 \
-  -b  128 \
+  -b  ${BATCH_SIZE} \
   --lam 1.5 --k 10 --iters 500 \
-  --logs-dir "/home/stud/leez/reid/src/BAU/examples/logs/m-ms-cs_c3" \
-  --manifold-aware \
+  --logs-dir "/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/examples/logs/m-ms-cs_c3_bsize${BATCH_SIZE}_maware${MANIFOLD_AWARE}_csize${CHUNK_SIZE}" \
+  --manifold-aware ${MANIFOLD_AWARE} \
   --curvature 1.0 \
-  --wandb-name-add "chunk500"
-  
+  --eval-epochs 5 10 15 20 25 30 35 40 45 50 55 59 \
+  --manifold-chunk-size ${CHUNK_SIZE} \
+  --verbosity 2 \
+  --wandb-name-add "bsize${BATCH_SIZE}_maware${MANIFOLD_AWARE}_csize${CHUNK_SIZE}" \

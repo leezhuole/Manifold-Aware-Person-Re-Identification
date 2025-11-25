@@ -21,7 +21,7 @@ except Exception:  # pragma: no cover - wandb is optional
 
 
 class BAUTrainer(object):
-    def __init__(self, model, memory_bank, num_classes, margin, lam=1.5, k=10, manifold=None):
+    def __init__(self, model, memory_bank, num_classes, margin, lam=1.5, k=10, manifold=None, manifold_chunk_size=500):
         super(BAUTrainer, self).__init__()
         self.model = model
         self.memory_bank = memory_bank
@@ -33,6 +33,7 @@ class BAUTrainer(object):
         self.lam = lam
         self.k = k
         self.manifold = manifold
+        self.manifold_chunk_size = manifold_chunk_size
 
     def train(self, epoch, train_loader, optimizer, iters, print_freq=1):
         self.model.train()
@@ -194,6 +195,7 @@ class BAUTrainer(object):
                       f' L_Uniform: {losses_uniform.val:.3f} ({losses_uniform.avg:.3f})  '
                       f' L_Domain: {losses_domain.val:.3f} ({losses_domain.avg:.3f})  '
                       f' Prec: {precisions.val:.2%} ({precisions.avg:.2%})')
+                torch.cuda.empty_cache()
 
     def _parse_data(self, data):
         imgs_w, imgs_s, pids, dids, = data
@@ -246,21 +248,34 @@ class BAUTrainer(object):
             yy = torch.pow(c, 2).sum(1, keepdim=True).expand(n, m).t()
             dist = xx + yy - 2 * f @ c.t() # m*n
         else:
-            # Chunked computation to avoid OOM with large batch sizes
-            dist = torch.zeros(m, n, device=f.device, dtype=f.dtype)
-            chunk_size = 500  # Process 500 classes at a time
-            for i in range(0, n, chunk_size):
-                end = min(i + chunk_size, n)
-                c_chunk = c[i:end]
-                # Compute distance for this chunk of classes
-                dist_chunk = self.manifold.dist(
+            chunk_size = self.manifold_chunk_size
+            if chunk_size is None:
+                dist = self.manifold.dist(
                     f.unsqueeze(1),
-                    c_chunk.unsqueeze(0),
+                    c.unsqueeze(0),
                     dim=-1,
                 ).pow(2)
-                dist[:, i:end] = dist_chunk
+            else:
+                if chunk_size <= 0:
+                    raise ValueError("manifold_chunk_size must be None or a positive integer")
+                dist = torch.empty(m, n, device=f.device, dtype=f.dtype)
+                f_unsqueezed = f.unsqueeze(1)
+                for i in range(0, n, chunk_size):
+                    end = min(i + chunk_size, n)
+                    c_chunk = c[i:end]
+                    dist_chunk = self.manifold.dist(
+                        f_unsqueezed,
+                        c_chunk.unsqueeze(0),
+                        dim=-1,
+                    ).pow(2)
+                    dist[:, i:end] = dist_chunk
 
         domain_mask = torch.eq(dids.unsqueeze(-1), self.memory_bank.labels).float().cuda() # same domain
         sorted_dist, indices = torch.sort(dist + (9999999.) * (1-domain_mask), dim=1, descending=False)
+
+        # Explicitly delete the large distance matrix to free memory for the next steps
+        del dist
+        torch.cuda.empty_cache()
+
         sorted_dist = sorted_dist[:, 1:m+1] # different class
         return sorted_dist.mul(-2).exp().mean().log()

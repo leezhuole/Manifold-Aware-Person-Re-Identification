@@ -11,33 +11,35 @@ from .evaluation_metrics import cmc, mean_ap
 from .utils.meters import AverageMeter
 from .utils.rerank import re_ranking
 from .utils import to_torch
+from .utils.visualisation import visualize_embeddings, visualize_hyperbolic_embeddings
 import geoopt
-from pykeops.torch import LazyTensor
+# from pykeops.torch import LazyTensor
+import wandb
 
-def pairwise_distance_keops(x, y, manifold):
-    """
-    Computes distance matrix using Symbolic KeOps.
-    Memory Usage: O(M + N) instead of O(M * N)
-    """
-    # 1. Wrap tensors as LazyTensors
-    # 'i' = indexed by query (rows), 'j' = indexed by gallery (cols)
-    X_i = LazyTensor(x.unsqueeze(1))  # Shape (M, 1, D)
-    Y_j = LazyTensor(y.unsqueeze(0))  # Shape (1, N, D)
+# def pairwise_distance_keops(x, y, manifold):
+#     """
+#     Computes distance matrix using Symbolic KeOps.
+#     Memory Usage: O(M + N) instead of O(M * N)
+#     """
+#     # 1. Wrap tensors as LazyTensors
+#     # 'i' = indexed by query (rows), 'j' = indexed by gallery (cols)
+#     X_i = LazyTensor(x.unsqueeze(1))  # Shape (M, 1, D)
+#     Y_j = LazyTensor(y.unsqueeze(0))  # Shape (1, N, D)
 
-    # 2. Define the Manifold Distance Symbolically
-    # This does NOT compute anything yet. It just builds a formula.
+#     # 2. Define the Manifold Distance Symbolically
+#     # This does NOT compute anything yet. It just builds a formula.
     
-    if isinstance(manifold, geoopt.PoincareBall):
-        # TODO
-        pass
+#     if isinstance(manifold, geoopt.PoincareBall):
+#         # TODO
+#         pass
 
-    else:
-        raise NotImplementedError("Need to write formula for this manifold")
+#     else:
+#         raise NotImplementedError("Need to write formula for this manifold")
 
-    # 3. Trigger Computation
-    # The .solve() or .sum() or simply converting to torch triggers the CUDA kernel
-    # This computes the M*N matrix directly.
-    return dist_m # Returns a LazyTensor, call .cpu() or .numpy() to materialize
+#     # 3. Trigger Computation
+#     # The .solve() or .sum() or simply converting to torch triggers the CUDA kernel
+#     # This computes the M*N matrix directly.
+#     return dist_m # Returns a LazyTensor, call .cpu() or .numpy() to materialize
 
 
 def extract_cnn_feature(model, inputs):
@@ -153,10 +155,18 @@ def pairwise_distance(features, query=None, gallery=None, manifold=None):
                 # Move result back to CPU immediately to free VRAM
                 dist_m[i:q_end, j:g_end] = dist_batch.cpu()
 
+                # Explicitly delete intermediate tensors and free GPU memory 
+                del dist_batch, y_batch
+                torch.cuda.empty_cache()
+
+            # Explicitly delete intermediate tensors and free GPU memory
+            del x_batch
+            torch.cuda.empty_cache()
+
     return dist_m, x.detach().cpu().numpy(), y.detach().cpu().numpy()
 
 
-def evaluate_all(query_features, gallery_features, distmat, query=None, gallery=None,
+def evaluate_all(query_features, gallery_features, distmat, visfig, query=None, gallery=None,
                  query_ids=None, gallery_ids=None,
                  query_cams=None, gallery_cams=None,
                  cmc_topk=(1, 5, 10), cmc_flag=False):
@@ -174,7 +184,7 @@ def evaluate_all(query_features, gallery_features, distmat, query=None, gallery=
     print('Mean AP: {:4.1%}'.format(mAP))
 
     if (not cmc_flag):
-        return mAP
+        return mAP, visfig
 
     cmc_configs = {
         'market1501': dict(separate_camera_set=False,
@@ -187,7 +197,7 @@ def evaluate_all(query_features, gallery_features, distmat, query=None, gallery=
     print('CMC Scores:')
     for k in cmc_topk:
         print('  top-{:<4}{:12.1%}'.format(k, cmc_scores['market1501'][k-1]))
-    return cmc_scores['market1501'], mAP
+    return cmc_scores['market1501'], mAP, visfig
 
 
 class Evaluator(object):
@@ -199,12 +209,41 @@ class Evaluator(object):
 
     def evaluate(self, data_loader, query, gallery, cmc_flag=False, rerank=False, cmc_topk=(1, 5, 10)):
         print('Start evaluation ...')
-        features, _ = extract_features(self.model, data_loader)
+        features, labels = extract_features(self.model, data_loader)
         distmat, query_features, gallery_features = pairwise_distance(
             features, query, gallery, manifold=self.manifold
         )
         distmat = distmat.cpu()
-        results = evaluate_all(query_features, gallery_features, distmat, query=query, gallery=gallery, cmc_flag=cmc_flag, cmc_topk=cmc_topk)
+        
+        # Visualize the embeddings (Note that we do not differentiate query and gallery for now)
+        if self.manifold is not None: 
+            vis_fig = visualize_hyperbolic_embeddings(
+                np.vstack([query_features, gallery_features]),
+                np.array([pid for _, pid, _ in query] + [pid for _, pid, _ in gallery]),
+                manifold=self.manifold,
+                is_query=np.concatenate([
+                    np.ones(len(query_features), dtype=bool), 
+                    np.zeros(len(gallery_features), dtype=bool)
+                ]),
+                k=None,
+                n=1000,
+                seed=42
+            )
+
+        else:
+            vis_fig = visualize_embeddings(
+                np.vstack([query_features, gallery_features]),
+                np.array([pid for _, pid, _ in query] + [pid for _, pid, _ in gallery]),
+                is_query=np.concatenate([
+                    np.ones(len(query_features), dtype=bool), 
+                    np.zeros(len(gallery_features), dtype=bool)
+                ]),
+                k=None,
+                n=1000,
+                seed=42
+            )
+
+        results = evaluate_all(query_features, gallery_features, distmat, vis_fig, query=query, gallery=gallery, cmc_flag=cmc_flag, cmc_topk=cmc_topk)
 
         if (not rerank):
             return results
@@ -217,4 +256,5 @@ class Evaluator(object):
         distmat_qq, _, _ = pairwise_distance(features, query, query, manifold=self.manifold)
         distmat_gg, _, _ = pairwise_distance(features, gallery, gallery, manifold=self.manifold)
         distmat = re_ranking(distmat.cpu().numpy(), distmat_qq.cpu().numpy(), distmat_gg.cpu().numpy())
-        return evaluate_all(query_features, gallery_features, distmat, query=query, gallery=gallery, cmc_flag=cmc_flag, cmc_topk=cmc_topk)
+        
+        return evaluate_all(query_features, gallery_features, distmat, vis_fig, query=query, gallery=gallery, cmc_flag=cmc_flag, cmc_topk=cmc_topk)
