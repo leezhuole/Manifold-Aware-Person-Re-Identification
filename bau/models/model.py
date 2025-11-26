@@ -13,26 +13,26 @@ from .mobilenetv2 import mobilenetv2_x1_4
 from geoopt import PoincareBall
 
 
-class HyperbolicClassifier(nn.Module):
-    """Classify by negative hyperbolic distance to learnable prototypes."""
+# class HyperbolicClassifier(nn.Module):
+#     """Classify by negative hyperbolic distance to learnable prototypes."""
 
-    def __init__(self, in_features, out_features, manifold):
-        super().__init__()
-        self.manifold = manifold
-        self.in_features = in_features
-        self.out_features = out_features
-        self.prototypes = geoopt.ManifoldParameter(
-            data=self.manifold.random(out_features, in_features),
-            manifold=self.manifold,
-        )
+#     def __init__(self, in_features, out_features, manifold):
+#         super().__init__()
+#         self.manifold = manifold
+#         self.in_features = in_features
+#         self.out_features = out_features
+#         self.prototypes = geoopt.ManifoldParameter(
+#             data=self.manifold.random(out_features, in_features),
+#             manifold=self.manifold,
+#         )
 
-    def forward(self, x):
-        # logits = -d_M(x, prototype_k)
-        dists = self.manifold.dist(
-            x.unsqueeze(1),
-            self.prototypes.unsqueeze(0),
-        )
-        return -dists
+#     def forward(self, x):
+#         # logits = -d_M(x, prototype_k)
+#         dists = self.manifold.dist(
+#             x.unsqueeze(1),
+#             self.prototypes.unsqueeze(0),
+#         )
+#         return -dists
 
 
 class resnet50(nn.Module):
@@ -69,10 +69,10 @@ class resnet50(nn.Module):
         init.constant_(self.bn_neck.bias, 0)
         self.bn_neck.bias.requires_grad_(False)
         if self.num_classes > 0:
-            if self.manifold is not None:
-                self.classifier = HyperbolicClassifier(2048, self.num_classes, self.manifold)
-            else:
-                self.classifier = nn.Linear(2048, self.num_classes, bias=False)
+            # if self.manifold is not None:
+            #     self.classifier = HyperbolicClassifier(2048, self.num_classes, self.manifold)
+            # else:
+            self.classifier = nn.Linear(2048, self.num_classes, bias=False)
 
     def forward(self, x):
         x = self.base(x)              # Euclidean features
@@ -96,10 +96,10 @@ class resnet50(nn.Module):
         if self.training:
             logits = None
             if self.num_classes > 0:
-                if self.manifold is not None:
-                    logits = self.classifier(f_hyp)
-                else:
-                    logits = self.classifier(f)
+                # if self.manifold is not None:
+                #     logits = self.classifier(f_hyp)
+                # else:
+                logits = self.classifier(f)
             if logits is not None:
                 return emb_hyp, f_hyp, logits
             else:

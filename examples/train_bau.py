@@ -170,7 +170,7 @@ def main_worker(args):
 
     # Initialize wandb if available
     if wandb is not None:
-        wandb.init(project='BAU', config=vars(args), name=f'BAU_{args.arch}_{args.target_dataset}_{manifold_name}_c{curvature}_{args.wandb_name_add}')
+        wandb.init(project='BAU', config=vars(args), name=args.wandb_name or None)
 
     # Organize dataset
     source_dataset = []
@@ -208,6 +208,51 @@ def main_worker(args):
     num_classes = train_dataset.num_train_pids
     model = create_model(args, num_classes=num_classes, manifold=manifold)
     log("Created model and moved to device", level=2)
+
+    if args.fine_tuning:
+        if args.checkpoint_path and osp.exists(args.checkpoint_path):
+            log(f"Loading checkpoint from {args.checkpoint_path} for fine-tuning", level=1)
+            checkpoint = torch.load(args.checkpoint_path)
+            state_dict = checkpoint.get('state_dict', checkpoint)
+            
+            model_dict = model.state_dict()
+            new_state_dict = {}
+            
+            for k, v in state_dict.items():
+                target_k = None
+                if k in model_dict:
+                    target_k = k
+                elif k.startswith('module.') and k[7:] in model_dict:
+                    target_k = k[7:]
+                elif 'module.' + k in model_dict:
+                    target_k = 'module.' + k
+                
+                if target_k:
+                    if model_dict[target_k].shape == v.shape:
+                        new_state_dict[target_k] = v
+                    else:
+                        log(f"Skipping layer {k} due to shape mismatch: {v.shape} vs {model_dict[target_k].shape}", level=1)
+            
+            model.load_state_dict(new_state_dict, strict=False)
+            
+            # Freeze backbone
+            if isinstance(model, torch.nn.DataParallel):
+                mod = model.module
+            else:
+                mod = model
+                
+            if hasattr(mod, 'base'):
+                for param in mod.base.parameters():
+                    param.requires_grad = False
+                log("Freezed backbone (base) layers", level=1)
+            else:
+                # Fallback: freeze everything except classifier and bn_neck
+                log("Model has no 'base' attribute. Freezing everything except classifier and bn_neck.", level=1)
+                for name, param in mod.named_parameters():
+                    if 'classifier' not in name and 'bn_neck' not in name:
+                        param.requires_grad = False
+        else:
+            log("Fine-tuning requested but checkpoint path is invalid or missing.", level=1)
 
     # Log dataset/model summary once
     if wandb is not None and getattr(wandb, "run", None) is not None:
@@ -432,11 +477,15 @@ if __name__ == '__main__':
     parser.add_argument('--milestones', nargs='+', type=int, default=[30, 50], help='milestones for the learning rate decay')
     
     # manifold-aware
-    parser.add_argument('--manifold-aware', type=bool, default=False, help='use manifold-aware distance computations (poincare ball)') 
+    parser.add_argument('--manifold-aware', type=lambda x: x.lower() == 'true', default=False, help='use manifold-aware distance computations (poincare ball)') 
     parser.add_argument('--curvature', type=float, default=1.0, help='manifold curvature (only used if manifold-aware is set)')
     parser.add_argument('--manifold-chunk-size', type=parse_optional_chunk_size, default=None,
                         help="chunk size for manifold distance computation; set to 'none' to disable chunking")
 
-    parser.add_argument('--wandb-name-add', type=str, default='', help='additional name info for wandb runs')
+    # fine-tuning
+    parser.add_argument('--fine-tuning', type=lambda x: x.lower() == 'true', default=False, help='fine-tune the model')
+    parser.add_argument('--checkpoint-path', type=str, default='', help='path to the checkpoint to load')
+
+    parser.add_argument('--wandb-name', type=str, default='', help='additional name info for wandb runs')
     parser.add_argument('--verbosity', type=int, default=0, choices=[0, 1, 2], help='increase output verbosity: 0=minimal, 1=info, 2=debug')
     main()
