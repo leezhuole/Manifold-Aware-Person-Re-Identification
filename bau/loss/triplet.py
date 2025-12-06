@@ -7,8 +7,18 @@ from torch import nn
 import torch.nn.functional as F
 
 
-def euclidean_dist(x, y):
+def euclidean_dist(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+	"""
+	Compute euclidean distance between x and y
+	
+	:param x: Input tensor 1 (m, D)
+	:param y: Input tensor 2 (n, D)
+	:param alpha: Rander's alpha value for Finsler spaces 
+
+	"""
 	m, n = x.size(0), y.size(0)
+	d = x.size(1)
+	assert d == y.size(1) 	# Sanity Check
 	xx = torch.pow(x, 2).sum(1, keepdim=True).expand(m, n)
 	yy = torch.pow(y, 2).sum(1, keepdim=True).expand(n, m).t()
 	dist = xx + yy
@@ -38,16 +48,16 @@ def _batch_hard(mat_distance, mat_similarity, indice=False):
 	return hard_p, hard_n
 
 
-def _batch_hard_neg(mat_distance, mat_similarity, indice=False):
-	sorted_mat_distance, positive_indices = torch.sort(mat_distance + (-9999999.) * (mat_similarity), dim=1, descending=True)
-	hard_p = sorted_mat_distance[:, 0]
-	hard_p_indice = positive_indices[:, 0]
-	sorted_mat_distance, negative_indices = torch.sort(mat_distance + (9999999.) * (1-mat_similarity), dim=1, descending=False)
-	hard_n = sorted_mat_distance[:, 0]
-	hard_n_indice = negative_indices[:, 0]
-	if(indice):
-		return hard_p, hard_n, hard_p_indice, hard_n_indice
-	return hard_p, hard_n
+# def _batch_hard_neg(mat_distance, mat_similarity, indice=False):
+# 	sorted_mat_distance, positive_indices = torch.sort(mat_distance + (-9999999.) * (mat_similarity), dim=1, descending=True)
+# 	hard_p = sorted_mat_distance[:, 0]
+# 	hard_p_indice = positive_indices[:, 0]
+# 	sorted_mat_distance, negative_indices = torch.sort(mat_distance + (9999999.) * (1-mat_similarity), dim=1, descending=False)
+# 	hard_n = sorted_mat_distance[:, 0]
+# 	hard_n_indice = negative_indices[:, 0]
+# 	if(indice):
+# 		return hard_p, hard_n, hard_p_indice, hard_n_indice
+# 	return hard_p, hard_n
 
 
 class TripletLoss(nn.Module):
@@ -57,6 +67,13 @@ class TripletLoss(nn.Module):
 	'''
 
 	def __init__(self, margin=None, normalize_feature=False, manifold=None):
+		"""
+		Docstring for __init__
+		
+		:param margin: margin value for MarginRankingLoss
+		:param normalize_feature: whether to normalize feature to unit length
+		:param manifold: whether the manifold is euclidean or hyperbolic
+		"""
 		super(TripletLoss, self).__init__()
 		self.margin = margin
 		self.normalize_feature = normalize_feature
@@ -95,24 +112,24 @@ class TripletLoss(nn.Module):
 		return loss # , prec
 
 
-class SoftTripletLoss(nn.Module):
-	def __init__(self, margin=0.0):
-		super(SoftTripletLoss, self).__init__()
-		self.margin = margin
+# class SoftTripletLoss(nn.Module):
+# 	def __init__(self, margin=0.0):
+# 		super(SoftTripletLoss, self).__init__()
+# 		self.margin = margin
 
-	def forward(self, emb, label):
-		mat_dist = euclidean_dist(emb, emb)
-		assert mat_dist.size(0) == mat_dist.size(1)
-		N = mat_dist.size(0)
-		mat_sim = label.expand(N, N).eq(label.expand(N, N).t()).float()
+# 	def forward(self, emb, label):
+# 		mat_dist = euclidean_dist(emb, emb)
+# 		assert mat_dist.size(0) == mat_dist.size(1)
+# 		N = mat_dist.size(0)
+# 		mat_sim = label.expand(N, N).eq(label.expand(N, N).t()).float()
 
-		dist_ap, dist_an, ap_idx, an_idx = cast(
-			Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
-			_batch_hard(mat_dist, mat_sim, indice=True),
-		)
-		assert dist_an.size(0) == dist_ap.size(0)
-		triple_dist = torch.stack((dist_ap, dist_an), dim=1)
-		triple_dist = F.log_softmax(triple_dist, dim=1)
-		loss = (- self.margin * triple_dist[:, 0] - (1 - self.margin) * triple_dist[:, 1]).mean()
+# 		dist_ap, dist_an, ap_idx, an_idx = cast(
+# 			Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+# 			_batch_hard(mat_dist, mat_sim, indice=True),
+# 		)
+# 		assert dist_an.size(0) == dist_ap.size(0)
+# 		triple_dist = torch.stack((dist_ap, dist_an), dim=1)
+# 		triple_dist = F.log_softmax(triple_dist, dim=1)
+# 		loss = (- self.margin * triple_dist[:, 0] - (1 - self.margin) * triple_dist[:, 1]).mean()
 
-		return loss
+# 		return loss

@@ -19,6 +19,15 @@ class MemoryBank(nn.Module):
     
     """
     def __init__(self, num_features, num_samples, momentum=0.1, manifold=None, eps=1e-12):
+        """
+        Docstring for __init__
+        
+        :param num_features: Embedding dimensionality of selected model
+        :param num_samples: Number of samples to store in the memory bank
+        :param momentum: Momentum factor for updating features
+        :param manifold: Manifold object for manifold-aware updates (optional)
+        :param eps: Small epsilon value to avoid division by zero
+        """
         super(MemoryBank, self).__init__()
         self.num_features = num_features
         self.num_samples = num_samples

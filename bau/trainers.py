@@ -21,7 +21,8 @@ except Exception:  # pragma: no cover - wandb is optional
 
 
 class BAUTrainer(object):
-    def __init__(self, model, memory_bank, num_classes, margin, lam=1.5, k=10, manifold=None, manifold_chunk_size=500):
+    def __init__(self, model, memory_bank, num_classes, margin, lam=1.5, k=10, manifold=None, manifold_chunk_size=500,
+                 use_aug_ce=False, use_align=True, use_uniform=True, use_domain=True):
         super(BAUTrainer, self).__init__()
         self.model = model
         self.memory_bank = memory_bank
@@ -34,6 +35,11 @@ class BAUTrainer(object):
         self.k = k
         self.manifold = manifold
         self.manifold_chunk_size = manifold_chunk_size
+        
+        self.use_aug_ce = use_aug_ce
+        self.use_align = use_align
+        self.use_uniform = use_uniform
+        self.use_domain = use_domain
 
     def train(self, epoch, train_loader, optimizer, iters, print_freq=1):
         self.model.train()
@@ -52,7 +58,7 @@ class BAUTrainer(object):
             batch_data = train_loader.next()
             # inputs_w: Weakly augmented images
             # inputs_s: Strongly augmented images
-            inputs_w, inputs_s, pids, dids = self._parse_data(batch_data)
+            inputs_w, inputs_s, pids,   dids = self._parse_data(batch_data)
             
             optimizer.zero_grad()
             with autocast(device_type='cuda'):
@@ -62,14 +68,7 @@ class BAUTrainer(object):
                 # f = F.normalize(f)        # already normalized in model
                 emb_w, _ = emb.chunk(2)
                 f_w, f_s = f.chunk(2)
-                logits_w, _ = logits.chunk(2)
-
-            # # feedforward
-            # inputs = torch.cat([inputs_w, inputs_s], dim=0)
-            # emb, f, logits = self.model(inputs)
-            # emb_w, _ = emb.chunk(2)
-            # f_w, f_s = f.chunk(2)
-            # logits_w, _ = logits.chunk(2)
+                logits_w, logits_s = logits.chunk(2)
 
                 # compute weights
                 with torch.no_grad():
@@ -85,7 +84,7 @@ class BAUTrainer(object):
                     topk = torch.sort(sims, dim=1, descending=True).indices[:, :self.k] # b*k
                     nn = torch.zeros_like(sims).cuda()
                     rows = torch.arange(nn.size(0)).unsqueeze(1).expand_as(topk)
-                    nn[rows, topk] = 1
+                    nn[rows, topk] = 1  
                     reciprocal = nn * nn.t() # b*b
                     reciprocal_w, reciprocal_s = reciprocal.chunk(2)
 
@@ -93,49 +92,22 @@ class BAUTrainer(object):
                     union = reciprocal_s.sum(1,keepdim=True) + reciprocal_w.sum(1,keepdim=True).t() - intersection
                     weight = intersection / (union+1e-6) # b*b
 
-            # compute weights
-            # with torch.no_grad():
-            #     if self.manifold is None:
-            #         sims = torch.matmul(f, f.t()) # b*b
-            #     else:
-            #         # Use negative squared geodesic distances, mirroring poincare-embeddings.
-            #         sims = -self.manifold.dist(
-            #             f.unsqueeze(1),
-            #             f.unsqueeze(0),
-            #             dim=-1,
-            #         ).pow(2)
-            #     topk = torch.sort(sims, dim=1, descending=True).indices[:, :self.k] # b*k
-            #     nn = torch.zeros_like(sims).cuda()
-            #     rows = torch.arange(nn.size(0)).unsqueeze(1).expand_as(topk)
-            #     nn[rows, topk] = 1
-            #     reciprocal = nn * nn.t() # b*b
-            #     reciprocal_w, reciprocal_s = reciprocal.chunk(2)
-
-            #     intersection = torch.matmul(reciprocal_s, reciprocal_w.t()) # b*b
-            #     union = reciprocal_s.sum(1,keepdim=True) + reciprocal_w.sum(1,keepdim=True).t() - intersection
-            #     weight = intersection / (union+1e-6) # b*b
-
                 # loss
                 loss_ce = self.criterion_ce(logits_w, pids)
+                if self.use_aug_ce:
+                    loss_ce += self.criterion_ce(logits_s, pids)
+                
                 loss_tri = self.criterion_tri(emb_w, pids)
-                loss_align = self.align_loss(f_w, f_s, pids, weight)
-                loss_uniform = 0.5*(self.uniform_loss(f_w) + self.uniform_loss(f_s))
+                
+                loss_align = self.align_loss(f_w, f_s, pids, weight) if self.use_align else torch.tensor(0.0).cuda()
+                
+                loss_uniform = 0.5*(self.uniform_loss(f_w) + self.uniform_loss(f_s)) if self.use_uniform else torch.tensor(0.0).cuda()
+                
                 loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids) +
-                                   self.domain_loss(f_s, self.memory_bank.features, dids))
+                                   self.domain_loss(f_s, self.memory_bank.features, dids)) if self.use_domain else torch.tensor(0.0).cuda()
 
                 with torch.no_grad():
                     self.memory_bank.momentum_update(f_w, pids)
-
-            # loss
-            # loss_ce = self.criterion_ce(logits_w, pids)
-            # loss_tri = self.criterion_tri(emb_w, pids)
-            # loss_align = self.align_loss(f_w, f_s, pids, weight)
-            # loss_uniform = 0.5*(self.uniform_loss(f_w) + self.uniform_loss(f_s))
-            # loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids) +
-            #                    self.domain_loss(f_s, self.memory_bank.features, dids))
-
-            # with torch.no_grad():
-            #     self.memory_bank.momentum_update(f_w, pids)
 
             loss = loss_ce + loss_tri + self.lam * loss_align + loss_uniform + loss_domain
 

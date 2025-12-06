@@ -97,7 +97,7 @@ def get_train_loader(args, dataset, height, width, batch_size, workers, num_inst
     return train_loader
 
 
-def get_memory_loader(dataset, height, width, batch_size, workers, testset=None):
+def get_memory_loader(dataset, height, width, batch_size, workers, trainset=None):
     normalizer = T.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225])
 
@@ -106,12 +106,12 @@ def get_memory_loader(dataset, height, width, batch_size, workers, testset=None)
              T.ToTensor(),
              normalizer
          ])
-    if testset is None:
-        testset = list(set(dataset.query) | set(dataset.gallery))
+    if trainset is None:
+        trainset = list(set(dataset.query) | set(dataset.gallery))
 
-    test_loader = DataLoader(TwoViewPreprocessor(testset, root=dataset.images_dir, transform=test_transformer),
+    memory_loader = DataLoader(TwoViewPreprocessor(trainset, root=dataset.images_dir, transform=test_transformer),
                              batch_size=batch_size, num_workers=workers, shuffle=False, pin_memory=False)
-    return test_loader
+    return memory_loader
 
 
 def get_test_loader(dataset, height, width, batch_size, workers, testset=None):
@@ -161,13 +161,6 @@ def main_worker(args):
         if args.verbosity >= level:
             print(message, flush=True)
 
-    if args.manifold_aware:
-        manifold_name = "hyperbolic"
-        curvature = args.curvature
-    else:
-        manifold_name = "euclidean"
-        curvature = 0.0
-
     # Initialize wandb if available
     if wandb is not None:
         wandb.init(project='BAU', config=vars(args), name=args.wandb_name or None)
@@ -189,7 +182,7 @@ def main_worker(args):
     log("Built training data loader", level=2)
     
     memory_loader = get_memory_loader(train_dataset, args.height, args.width, args.batch_size, args.workers,
-                                        testset=sorted(train_dataset.train))
+                                      trainset=sorted(train_dataset.train))
     log("Prepared memory loader for initial feature extraction", level=2)
     
     test_dataset = get_data(args.target_dataset, args.data_dir)
@@ -341,7 +334,11 @@ def main_worker(args):
                          lam=args.lam, 
                          k=args.k, 
                          manifold=manifold,
-                         manifold_chunk_size=args.manifold_chunk_size)
+                         manifold_chunk_size=args.manifold_chunk_size,
+                         use_aug_ce=args.use_aug_ce,
+                         use_align=not args.no_align,
+                         use_uniform=not args.no_uniform,
+                         use_domain=not args.no_domain)
     log("Trainer constructed", level=2)
 
     log(f"Starting training loop for {args.epochs} epochs", level=1)
@@ -472,9 +469,15 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.00035, help='learning rate')
     parser.add_argument('--weight-decay', type=float, default=5e-4)
     parser.add_argument('--epochs', type=int, default=60)           
-    parser.add_argument('--iters', type=int, default=500, help='iteration for each epcoh')
+    parser.add_argument('--iters', type=int, default=500, help='iteration for each epoch')
     parser.add_argument('--warmup-step', type=int, default=10)
     parser.add_argument('--milestones', nargs='+', type=int, default=[30, 50], help='milestones for the learning rate decay')
+
+    # ablation
+    parser.add_argument('--use-aug-ce', action='store_true', help='use cross entropy loss on strongly augmented images')
+    parser.add_argument('--no-align', action='store_true', help='disable alignment loss')
+    parser.add_argument('--no-uniform', action='store_true', help='disable uniformity loss')
+    parser.add_argument('--no-domain', action='store_true', help='disable domain loss')
     
     # manifold-aware
     parser.add_argument('--manifold-aware', type=lambda x: x.lower() == 'true', default=False, help='use manifold-aware distance computations (poincare ball)') 
@@ -482,6 +485,9 @@ if __name__ == '__main__':
     parser.add_argument('--manifold-chunk-size', type=parse_optional_chunk_size, default=None,
                         help="chunk size for manifold distance computation; set to 'none' to disable chunking")
 
+    # finsler manifolds (Rander's metric)
+    parser.add_argument('--omega', type=float, default=0.0, help='omega parameter for Finsler manifold (Rander metric)')
+    
     # fine-tuning
     parser.add_argument('--fine-tuning', type=lambda x: x.lower() == 'true', default=False, help='fine-tune the model')
     parser.add_argument('--checkpoint-path', type=str, default='', help='path to the checkpoint to load')
@@ -489,3 +495,4 @@ if __name__ == '__main__':
     parser.add_argument('--wandb-name', type=str, default='', help='additional name info for wandb runs')
     parser.add_argument('--verbosity', type=int, default=0, choices=[0, 1, 2], help='increase output verbosity: 0=minimal, 1=info, 2=debug')
     main()
+

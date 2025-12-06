@@ -38,7 +38,7 @@ from geoopt import PoincareBall
 class resnet50(nn.Module):
     """
     Adapted such that the model's forward pass outputs embeddings that are
-    on the defined manifold (if provided). Example: Poincare ball.
+    on the defined manifold (if provided). Example: Poincare ball. 
 
     """
     def __init__(self, num_classes=0, pretrained=True, manifold=None):
@@ -53,11 +53,17 @@ class resnet50(nn.Module):
         resnet.layer4[0].downsample[0].stride = (1, 1)
 
         self.base = nn.Sequential(
-            resnet.conv1, resnet.bn1, resnet.relu, resnet.maxpool,
-            resnet.layer1, nn.InstanceNorm2d(256),
-            resnet.layer2, nn.InstanceNorm2d(512),
-            resnet.layer3, nn.InstanceNorm2d(1024),
-            resnet.layer4, GeneralizedMeanPoolingP(output_size=(1, 1))
+            resnet.conv1, 
+            resnet.bn1, 
+            resnet.relu, 
+            resnet.maxpool,
+            resnet.layer1, 
+            nn.InstanceNorm2d(256),
+            resnet.layer2, 
+            nn.InstanceNorm2d(512),
+            resnet.layer3, 
+            nn.InstanceNorm2d(1024),
+            resnet.layer4
         )
 
         # pooling
