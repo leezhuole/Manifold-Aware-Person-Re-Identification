@@ -31,11 +31,11 @@ MANIFOLD_AWARE=False            # Set to false first to reproduce the paper's ab
 
 # Loss configurations (ordered to match paper rows)
 LOSS_CONFIGS=(
-  "--no-align --no-uniform --no-domain"                               # Baseline
+  "--no-align --no-uniform --no-domain --prob 0.0"                    # Baseline
   "--no-align --no-uniform --no-domain --use-aug-ce"                  # L_ce
   "--no-uniform --no-domain"                                          # L_align
   "--no-domain"                                                       # L_align + L_uniform
-  ""                                                                   # L_align + L_uniform + L_domain
+  ""                                                                  # L_align + L_uniform + L_domain
 )
 LOSS_NAMES=(
   "Baseline"
