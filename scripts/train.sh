@@ -10,3 +10,19 @@ CUDA_VISIBLE_DEVICES=0 python examples/train_bau.py -a resnet50 -ds market1501 m
 
 # Protocol-1
 # CUDA_VISIBLE_DEVICES=0,1 python examples/train_bau.py -a resnet50 -ds market1501dg cuhk02dg cuhk03dg cuhksysu -dt grid -b 256 --lam 1.5 --k 10 --iters 500
+
+
+CUDA_VISIBLE_DEVICE=0 python examples/train_bau.py \
+  -a resnet50 \
+  -ds market1501 msmt17 cuhksysu \
+  -dt cuhk03 \
+  -b  64 \
+  --lam 1.5 --k 10 --iters 10 \
+  --logs-dir "logs/m-ms-cs_c3_bsize64_finslerDEBUG" \
+  --eval-epochs 2 4 \
+  --verbosity 2 \
+  --wandb-name "resnet50_cuhk03_bsize64_finslerDEBUG" \
+  --epochs 5 \
+  --alpha 0.0 \
+  --memory-init random
+

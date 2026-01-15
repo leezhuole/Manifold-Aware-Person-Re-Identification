@@ -62,14 +62,6 @@ def get_data(name, data_dir):
     dataset = datasets.create(name, root)
     return dataset
 
-def parse_optional_float(value: str | None):
-    if value is None:
-        return None
-    value_str = str(value).strip()
-    if value_str.lower() in {"none", "null"}:
-        return None
-    return float(value_str)
-
 
 def get_train_loader(args, dataset, height, width, batch_size, workers, num_instances, images_dir):
     normalizer = T.Normalize(mean=[0.485, 0.456, 0.406],
@@ -275,28 +267,40 @@ def main_worker(args):
     bank_labels = cast(torch.Tensor, memory_bank.labels)
     device = bank_features.device
 
-    log("Extracting initial features for memory bank", level=1)
-    features, _ = extract_features(model, memory_loader, print_freq=50)
-    log("Finished feature extraction", level=1)
-    features_dict = collections.defaultdict(list)
-    for f, pid, _, _ in sorted(train_dataset.train):
-        features_dict[pid].append(features[f].unsqueeze(0))
-    log("Computed feature lists per identity", level=2)
-    centroids = []
-    for pid in sorted(features_dict.keys()):
-        reps = torch.cat(features_dict[pid], 0).to(device)
-        if manifold is None:
-            centroid = F.normalize(reps.mean(0), dim=0)
-        else:
-            reps = manifold.projx(reps, dim=-1)
-            tangent = manifold.logmap0(reps, dim=-1)
-            mean_tangent = tangent.mean(dim=0, keepdim=True)
-            centroid = manifold.expmap0(mean_tangent, dim=-1)
-            centroid = manifold.projx(centroid, dim=-1).squeeze(0)
-        centroids.append(centroid.cpu())
-    centroids = torch.stack(centroids, 0).to(device)
-    memory_bank.features = centroids
-    log("Initialized memory bank centroids", level=1)
+    feature_dim = bank_features.shape[1]
+
+    if args.memory_init != "extract":
+        log(f"Initializing memory bank with mode '{args.memory_init}' (no feature extraction)", level=1)
+        if args.memory_init == "zero":
+            centroids = torch.zeros(num_classes, feature_dim, device=device)
+        else:  # random
+            centroids = torch.randn(num_classes, feature_dim, device=device)
+            centroids = F.normalize(centroids, dim=1)
+        memory_bank.features = centroids
+        log("Initialized memory bank centroids (synthetic)", level=1)
+    else:
+        log("Extracting initial features for memory bank", level=1)
+        features, _ = extract_features(model, memory_loader, print_freq=50)
+        log("Finished feature extraction", level=1)
+        features_dict = collections.defaultdict(list)
+        for f, pid, _, _ in sorted(train_dataset.train):
+            features_dict[pid].append(features[f].unsqueeze(0))
+        log("Computed feature lists per identity", level=2)
+        centroids = []
+        for pid in sorted(features_dict.keys()):
+            reps = torch.cat(features_dict[pid], 0).to(device)
+            if manifold is None:
+                centroid = F.normalize(reps.mean(0), dim=0)
+            else:
+                reps = manifold.projx(reps, dim=-1)
+                tangent = manifold.logmap0(reps, dim=-1)
+                mean_tangent = tangent.mean(dim=0, keepdim=True)
+                centroid = manifold.expmap0(mean_tangent, dim=-1)
+                centroid = manifold.projx(centroid, dim=-1).squeeze(0)
+            centroids.append(centroid.cpu())
+        centroids = torch.stack(centroids, 0).to(device)
+        memory_bank.features = centroids
+        log("Initialized memory bank centroids", level=1)
 
     domain_offset = 0
     domain_labels = []
@@ -347,10 +351,7 @@ def main_worker(args):
                          use_align=not args.no_align,
                          use_uniform=not args.no_uniform,
                          use_domain=not args.no_domain, 
-                         use_triplet=not args.no_triplet,
-                         use_ce=not args.no_ce,
                          alpha=args.alpha)
-    
     log("Trainer constructed", level=2)
 
     log(f"Starting training loop for {args.epochs} epochs", level=1)
@@ -476,6 +477,8 @@ if __name__ == '__main__':
     parser.add_argument('--lam', type=float, default=1.5, help='weighting parameter for alignment loss')
     parser.add_argument('--k', type=int, default=10, help='k-NN parameter for weighting strategy')
     parser.add_argument('--prob', type=float, default=0.5, help='probability of applying data augmentation to inputs')
+    parser.add_argument('--memory-init', type=str, default='extract', choices=['extract', 'zero', 'random'],
+                        help='initialize memory bank by feature extraction (default), zeros, or random unit vectors for debugging')
 
     # optimizer
     parser.add_argument('--lr', type=float, default=0.00035, help='learning rate')
@@ -490,8 +493,6 @@ if __name__ == '__main__':
     parser.add_argument('--no-align', action='store_true', help='disable alignment loss')
     parser.add_argument('--no-uniform', action='store_true', help='disable uniformity loss')
     parser.add_argument('--no-domain', action='store_true', help='disable domain loss')
-    parser.add_argument('--no-triplet', action='store_true', help='disable triplet loss')
-    parser.add_argument('--no-ce', action='store_true', help='disable cross-entropy loss')
     
     # manifold-aware
     parser.add_argument('--manifold-aware', type=lambda x: x.lower() == 'true', default=False, help='use manifold-aware distance computations (poincare ball)') 
@@ -500,7 +501,7 @@ if __name__ == '__main__':
                         help="chunk size for manifold distance computation; set to 'none' to disable chunking")
 
     # finsler manifolds (Rander's metric)
-    parser.add_argument('--alpha', type=parse_optional_float, default=None, help='alpha parameter for Finsler manifold (Rander metric)')
+    parser.add_argument('--alpha', type=float, default=None, help='alpha parameter for Finsler manifold (Rander metric)')
     
     # fine-tuning
     parser.add_argument('--fine-tuning', type=lambda x: x.lower() == 'true', default=False, help='fine-tune the model')
