@@ -1,0 +1,15 @@
+MethodKey,Method,Transfer,mAP,Rank-1
+baseline,Baseline,M+MS+CS -> C3,31.5,30.2
+baseline,Baseline,M+CS+C3 -> MS,19.8,42.3
+l_ce,$\mathcal{L}_{ce}$,M+MS+CS -> C3,24.3,22.9
+l_ce,$\mathcal{L}_{ce}$,M+CS+C3 -> MS,17.4,40.6
+l_ce,$\mathcal{L}_{ce}$,MS+CS+C3 -> M,62.2,81.9
+l_align,$\mathcal{L}_{align}$,M+MS+CS -> C3,40.2,40.1
+l_align,$\mathcal{L}_{align}$,M+CS+C3 -> MS,21.5,47.0
+l_align,$\mathcal{L}_{align}$,MS+CS+C3 -> M,76.7,89.0
+l_align_uniform,$\mathcal{L}_{align}+\mathcal{L}_{uniform}$,M+MS+CS -> C3,40.7,41.1
+l_align_uniform,$\mathcal{L}_{align}+\mathcal{L}_{uniform}$,M+CS+C3 -> MS,21.3,45.5
+l_align_uniform,$\mathcal{L}_{align}+\mathcal{L}_{uniform}$,MS+CS+C3 -> M,77.0,89.3
+l_full,$\mathcal{L}_{align}+\mathcal{L}_{uniform}+\mathcal{L}_{domain}$,M+MS+CS -> C3,42.1,42.0
+l_full,$\mathcal{L}_{align}+\mathcal{L}_{uniform}+\mathcal{L}_{domain}$,M+CS+C3 -> MS,22.5,48.0
+l_full,$\mathcal{L}_{align}+\mathcal{L}_{uniform}+\mathcal{L}_{domain}$,MS+CS+C3 -> M,76.9,90.3

@@ -5,11 +5,19 @@ This script scans per-run `log.txt` files produced by `train_bau.py`, extracts
 final mAP / Rank-1 scores, groups them by loss configuration and
 source->target dataset transfer, and emits both Markdown and LaTeX tables that
 mirror the ablation study shown in the BAU paper (Table 5).
+
+parse_ablation_results.py \
+    --logs-root /home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/logs/ablationEuclidean-P3 \
+    --markdown-output /home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/results/ablationEuclidean-P3.md \
+    --csv-output /home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/results/ablationEuclidean-P3.csv
+
+
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 from collections import defaultdict
@@ -19,6 +27,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 # Dataset transfer identifiers -> pretty column headers
 DATASET_COLUMNS = [
     (("market1501", "msmt17", "cuhksysu"), "cuhk03", "M+MS+CS -> C3"),
+    (("market1501dg", "msmt17dg", "cuhksysu"), "cuhk03", "M+MS+CS -> C3"),
     (("market1501", "cuhksysu", "cuhk03"), "msmt17", "M+CS+C3 -> MS"),
     (("msmt17", "cuhksysu", "cuhk03"), "market1501", "MS+CS+C3 -> M"),
 ]
@@ -62,6 +71,12 @@ def parse_cli() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional path to dump the raw metrics as JSON",
+    )
+    parser.add_argument(
+        "--csv-output",
+        type=Path,
+        default=None,
+        help="Optional path to save metrics as CSV for plotting",
     )
     return parser.parse_args()
 
@@ -150,7 +165,9 @@ def collect_log_files(root: Path) -> Iterable[Path]:
     return sorted(root.glob("**/log.txt"))
 
 
-def build_tables(results: Dict[str, Dict[str, Tuple[float, float]]]) -> Tuple[str, str, Dict[str, object]]:
+def build_tables(
+    results: Dict[str, Dict[str, Tuple[float, float]]]
+) -> Tuple[str, str, Dict[str, object], List[Dict[str, object]]]:
     # Prepare Markdown header
     headers: List[str] = ["Method"]
     for _, _, header in DATASET_COLUMNS:
@@ -170,6 +187,7 @@ def build_tables(results: Dict[str, Dict[str, Tuple[float, float]]]) -> Tuple[st
     ]
 
     raw_payload: Dict[str, object] = {}
+    csv_rows: List[Dict[str, object]] = []
 
     for key, md_label, latex_label in LOSS_ROWS:
         row_metrics = results.get(key, {})
@@ -184,6 +202,17 @@ def build_tables(results: Dict[str, Dict[str, Tuple[float, float]]]) -> Tuple[st
                 latex_cells.extend(["-", "-"])
                 continue
             map_val, rank_val = metrics
+
+            # Collect long-form rows to make plotting straightforward.
+            csv_rows.append(
+                {
+                    "MethodKey": key,
+                    "Method": md_label,
+                    "Transfer": column_header,
+                    "mAP": map_val,
+                    "Rank-1": rank_val,
+                }
+            )
             row_values.extend([f"{map_val:.1f}", f"{rank_val:.1f}"])
             latex_cells.extend([f"{map_val:.1f}", f"{rank_val:.1f}"])
             averages.append(metrics)
@@ -207,7 +236,7 @@ def build_tables(results: Dict[str, Dict[str, Tuple[float, float]]]) -> Tuple[st
     latex_lines.extend(["\\hline", "\\end{tabular}", "\\caption{Ablation study of loss functions for augmented images.}", "\\end{table}"])
     latex_table = "\n".join(latex_lines)
 
-    return md_table, latex_table, raw_payload
+    return md_table, latex_table, raw_payload, csv_rows
 
 
 def main() -> None:
@@ -233,7 +262,7 @@ def main() -> None:
     if not results:
         raise SystemExit("No results parsed; ensure that training logs exist under the specified root.")
 
-    md_table, latex_table, payload = build_tables(results)
+    md_table, latex_table, payload, csv_rows = build_tables(results)
 
     print("\nMarkdown Table:\n")
     print(md_table)
@@ -254,6 +283,17 @@ def main() -> None:
         args.json_output.parent.mkdir(parents=True, exist_ok=True)
         args.json_output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print(f"[INFO] JSON payload written to {args.json_output}")
+
+    if args.csv_output:
+        args.csv_output.parent.mkdir(parents=True, exist_ok=True)
+        with args.csv_output.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["MethodKey", "Method", "Transfer", "mAP", "Rank-1"],
+            )
+            writer.writeheader()
+            writer.writerows(csv_rows)
+        print(f"[INFO] CSV table written to {args.csv_output}")
 
 
 if __name__ == "__main__":

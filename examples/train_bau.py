@@ -338,7 +338,10 @@ def main_worker(args):
                          use_aug_ce=args.use_aug_ce,
                          use_align=not args.no_align,
                          use_uniform=not args.no_uniform,
-                         use_domain=not args.no_domain)
+                         use_domain=not args.no_domain, 
+                         use_triplet=not args.no_triplet,
+                         use_ce=not args.no_ce)
+    
     log("Trainer constructed", level=2)
 
     log(f"Starting training loop for {args.epochs} epochs", level=1)
@@ -478,15 +481,17 @@ if __name__ == '__main__':
     parser.add_argument('--no-align', action='store_true', help='disable alignment loss')
     parser.add_argument('--no-uniform', action='store_true', help='disable uniformity loss')
     parser.add_argument('--no-domain', action='store_true', help='disable domain loss')
+    parser.add_argument('--no-triplet', action='store_true', help='disable triplet loss')
+    parser.add_argument('--no-ce', action='store_true', help='disable cross-entropy loss')
     
     # manifold-aware
     parser.add_argument('--manifold-aware', type=lambda x: x.lower() == 'true', default=False, help='use manifold-aware distance computations (poincare ball)') 
-    parser.add_argument('--curvature', type=float, default=1.0, help='manifold curvature (only used if manifold-aware is set)')
+    parser.add_argument('--curvature', type=float, default=0.0, help='manifold curvature (only used if manifold-aware is set)')
     parser.add_argument('--manifold-chunk-size', type=parse_optional_chunk_size, default=None,
                         help="chunk size for manifold distance computation; set to 'none' to disable chunking")
 
     # finsler manifolds (Rander's metric)
-    parser.add_argument('--omega', type=float, default=0.0, help='omega parameter for Finsler manifold (Rander metric)')
+    parser.add_argument('--omega', type=float, default=None, help='omega parameter for Finsler manifold (Rander metric)')
     
     # fine-tuning
     parser.add_argument('--fine-tuning', type=lambda x: x.lower() == 'true', default=False, help='fine-tune the model')

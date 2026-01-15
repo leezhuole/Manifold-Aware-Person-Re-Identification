@@ -1,0 +1,6 @@
+MethodKey,Method,Transfer,mAP,Rank-1
+baseline,Baseline,M+MS+CS -> C3,28.6,28.4
+l_ce,$\mathcal{L}_{ce}$,M+MS+CS -> C3,16.7,15.3
+l_align,$\mathcal{L}_{align}$,M+MS+CS -> C3,29.2,28.6
+l_align_uniform,$\mathcal{L}_{align}+\mathcal{L}_{uniform}$,M+MS+CS -> C3,29.7,29.0
+l_full,$\mathcal{L}_{align}+\mathcal{L}_{uniform}+\mathcal{L}_{domain}$,M+MS+CS -> C3,29.1,28.7

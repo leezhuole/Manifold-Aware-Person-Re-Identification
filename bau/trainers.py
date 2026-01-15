@@ -21,8 +21,8 @@ except Exception:  # pragma: no cover - wandb is optional
 
 
 class BAUTrainer(object):
-    def __init__(self, model, memory_bank, num_classes, margin, lam=1.5, k=10, manifold=None, manifold_chunk_size=500,
-                 use_aug_ce=False, use_align=True, use_uniform=True, use_domain=True):
+    def __init__(self, model, memory_bank, num_classes, margin, lam=1.5, k=10, manifold=None, manifold_chunk_size=None,
+                 use_aug_ce=False, use_align=True, use_uniform=True, use_domain=True, use_triplet=True, use_ce=True):
         super(BAUTrainer, self).__init__()
         self.model = model
         self.memory_bank = memory_bank
@@ -40,6 +40,8 @@ class BAUTrainer(object):
         self.use_align = use_align
         self.use_uniform = use_uniform
         self.use_domain = use_domain
+        self.use_triplet = use_triplet
+        self.use_ce = use_ce
 
     def train(self, epoch, train_loader, optimizer, iters, print_freq=1):
         self.model.train()
@@ -93,11 +95,12 @@ class BAUTrainer(object):
                     weight = intersection / (union+1e-6) # b*b
 
                 # loss
-                loss_ce = self.criterion_ce(logits_w, pids)
+                loss_ce = self.criterion_ce(logits_w, pids) if self.use_ce else torch.tensor(0.0).cuda()
+
                 if self.use_aug_ce:
-                    loss_ce += self.criterion_ce(logits_s, pids)
+                    loss_ce += self.criterion_ce(logits_s, pids) 
                 
-                loss_tri = self.criterion_tri(emb_w, pids)
+                loss_tri = self.criterion_tri(emb_w, pids) if self.use_triplet else torch.tensor(0.0).cuda()
                 
                 loss_align = self.align_loss(f_w, f_s, pids, weight) if self.use_align else torch.tensor(0.0).cuda()
                 
