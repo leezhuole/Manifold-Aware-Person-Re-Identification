@@ -7,9 +7,10 @@ from torch import nn
 import torch.nn.functional as F
 
 
-def euclidean_dist(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+def euclidean_dist(x: torch.Tensor, y: torch.Tensor, alpha=None) -> torch.Tensor:
 	"""
-	Compute euclidean distance between x and y
+	Compute euclidean distance between x and y. This distance function transforms to the canonical 
+	Randers distance is alpha is defined as not None. 
 	
 	:param x: Input tensor 1 (m, D)
 	:param y: Input tensor 2 (n, D)
@@ -24,6 +25,44 @@ def euclidean_dist(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 	dist = xx + yy
 	dist = dist -2 * x@y.t()
 	dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability
+	
+	if alpha is not None:
+		assert alpha < 1 		# Sanity Check 
+		# y_subtract_x = y.unsqueeze(0).expand(m, n, -1) - x.unsqueeze(1).expand(m, n, -1) # (m, n, D)
+		# omega_vec = torch.zeros(d, device=x.device)
+		# omega_vec[-1] = alpha
+		# finsler_term = y_subtract_x @ omega_vec
+		
+		# Only the last coordinate contributes because omega = [0, ..., 0, alpha].
+		# Avoid materializing the full (m, n, D) tensor by computing the last-dim
+		# difference directly: (y_last - x_last) * alpha -> shape (m, n).
+		y_last = y[:, -1].unsqueeze(0) 	# (1, n)
+		x_last = x[:, -1].unsqueeze(1) 	# (m, 1)
+		finsler_term = (y_last - x_last) * alpha
+		assert finsler_term.shape == dist.shape, "Finsler term shape mismatch"
+		
+		# DEBUG: Sanity check for alpha=0
+		if alpha == 0:
+			# If everything is correct, dist + finsler_term should be identical to dist, or at least
+			# within a tiny float tolerarnce.
+
+			# 1. Check for NaNs (e.g., if inputs had Inf, Inf * 0 = NaN)
+			if torch.isnan(finsler_term).any():
+				print(f"[DEBUG CRITICAL] alpha=0 but Finsler term contains NaNs! Check inputs for Infinity.")
+
+			# 2. Check for values > 0 (should all be zeros)
+			if not torch.allclose(finsler_term, torch.zeros_like(finsler_term)):
+				max_val = finsler_term.abs().max().item()
+				print(f"[DEBUG CRITICAL] alpha=0 but Finsler term is not zero! Max absolute value: {max_val}")
+
+			# 3. Direct comparison of before/after distance matrices
+			new_dist = dist + finsler_term
+			diff = (dist - new_dist).abs()
+			if diff.max() > 1e-7:  # Tolerance for float32 additions
+				print(f"[DEBUG CRITICAL] alpha=0 distance matrix mismatch! Max diff: {diff.max().item()}")
+		
+		dist = dist + finsler_term
+
 	return dist
 
 
@@ -66,33 +105,44 @@ class TripletLoss(nn.Module):
 	Details can be seen in 'In defense of the Triplet Loss for Person Re-Identification'
 	'''
 
-	def __init__(self, margin=None, normalize_feature=False, manifold=None):
+	def __init__(self, margin=None, normalize_feature=False, manifold=None, alpha=None):
 		"""
 		Docstring for __init__
 		
 		:param margin: margin value for MarginRankingLoss
 		:param normalize_feature: whether to normalize feature to unit length
 		:param manifold: whether the manifold is euclidean or hyperbolic
+		:param alpha: rander's alpha value for finsler spaces
 		"""
 		super(TripletLoss, self).__init__()
 		self.margin = margin
 		self.normalize_feature = normalize_feature
 		self.manifold = manifold
+		self.alpha = alpha
 		if margin is not None:
 			self.margin_loss = nn.MarginRankingLoss(margin=float(margin)).cuda()
 		else:
 			self.margin_loss = nn.SoftMarginLoss()
 
 	def forward(self, emb, label):
+		# Sanity checks
+		if self.manifold is not None and self.alpha is not None:
+			raise ValueError("Finsler spaces is not supported for non-euclidean manifolds.")
+
+		# Case 1: Finsler spaces and Euclidean spaces
 		if self.manifold is None:
 			if self.normalize_feature:
 				# equal to cosine similarity
 				emb = F.normalize(emb)
-			mat_dist = euclidean_dist(emb, emb)
+			mat_dist = euclidean_dist(x=emb, y=emb, alpha=self.alpha)
+		
+		# Case 2: Non-euclidean manifold		
 		else:
 			mat_dist = self.manifold.dist(
 				emb.unsqueeze(1), emb.unsqueeze(0), dim=-1
 			)
+
+			
 		assert mat_dist.size(0) == mat_dist.size(1)
 		N = mat_dist.size(0)
 		mat_sim = label.expand(N, N).eq(label.expand(N, N).t()).float()

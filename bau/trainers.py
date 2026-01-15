@@ -12,6 +12,7 @@ from .loss import CrossEntropyLabelSmooth, TripletLoss
 from .utils.meters import AverageMeter
 from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
+from .loss.triplet import euclidean_dist
 
 # optional wandb logging (kept minimal and non-intrusive)
 try:
@@ -22,13 +23,13 @@ except Exception:  # pragma: no cover - wandb is optional
 
 class BAUTrainer(object):
     def __init__(self, model, memory_bank, num_classes, margin, lam=1.5, k=10, manifold=None, manifold_chunk_size=500,
-                 use_aug_ce=False, use_align=True, use_uniform=True, use_domain=True):
+                 use_aug_ce=False, use_align=True, use_uniform=True, use_domain=True, alpha=None):
         super(BAUTrainer, self).__init__()
         self.model = model
         self.memory_bank = memory_bank
         
         self.criterion_ce = CrossEntropyLabelSmooth(num_classes=num_classes).cuda()
-        self.criterion_tri = TripletLoss(margin=margin, manifold=manifold).cuda()
+        self.criterion_tri = TripletLoss(margin=margin, manifold=manifold, alpha=alpha).cuda()
         self.scaler = GradScaler()
 
         self.lam = lam
@@ -40,6 +41,9 @@ class BAUTrainer(object):
         self.use_align = use_align
         self.use_uniform = use_uniform
         self.use_domain = use_domain
+
+        # Finsler space parameter
+        self.alpha = alpha
 
     def train(self, epoch, train_loader, optimizer, iters, print_freq=1):
         self.model.train()
@@ -99,12 +103,12 @@ class BAUTrainer(object):
                 
                 loss_tri = self.criterion_tri(emb_w, pids)
                 
-                loss_align = self.align_loss(f_w, f_s, pids, weight) if self.use_align else torch.tensor(0.0).cuda()
+                loss_align = self.align_loss(f_w, f_s, pids, weight, self.alpha) if self.use_align else torch.tensor(0.0).cuda()
                 
-                loss_uniform = 0.5*(self.uniform_loss(f_w) + self.uniform_loss(f_s)) if self.use_uniform else torch.tensor(0.0).cuda()
+                loss_uniform = 0.5*(self.uniform_loss(f_w, self.alpha) + self.uniform_loss(f_s, self.alpha)) if self.use_uniform else torch.tensor(0.0).cuda()
                 
-                loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids) +
-                                   self.domain_loss(f_s, self.memory_bank.features, dids)) if self.use_domain else torch.tensor(0.0).cuda()
+                loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids, self.alpha) +
+                                   self.domain_loss(f_s, self.memory_bank.features, dids, self.alpha)) if self.use_domain else torch.tensor(0.0).cuda()
 
                 with torch.no_grad():
                     self.memory_bank.momentum_update(f_w, pids)
@@ -173,30 +177,52 @@ class BAUTrainer(object):
         imgs_w, imgs_s, pids, dids, = data
         return imgs_w.cuda(), imgs_s.cuda(), pids.cuda(), dids.cuda()
     
-    def align_loss(self, f_w, f_s, y, w):
-        m, n = f_s.size(0), f_w.size(0)
+    def align_loss(self, f_w, f_s, y, w, alpha=None):
 
+        # Case 1: Euclidean manifold
+        # if self.manifold is None and alpha is None:
+        #     dist_squared = euclidean_dist(f_s, f_w).pow(2)
+
+        # Case 2: Finsler spaces and Euclidean Manifold
         if self.manifold is None:
-            xx = torch.pow(f_s, 2).sum(1, keepdim=True).expand(m, n)
-            yy = torch.pow(f_w, 2).sum(1, keepdim=True).expand(n, m).t()
-            dist = xx + yy - 2 * f_s @ f_w.t()
-        else:
+            dist_squared = euclidean_dist(f_s, f_w, alpha).pow(2)
+
+        # Case 3: Non-euclidean manifold
+        elif self.manifold is not None:
             # Match the hyperbolic weighting strategy seen in geoopt/vision examples.
-            dist = self.manifold.dist(
+            dist_squared = self.manifold.dist(
                 f_s.unsqueeze(1),
                 f_w.unsqueeze(0),
                 dim=-1,
             ).pow(2)
+        
+        else:
+            raise ValueError("Invalid manifold/alpha configuration for align loss.")
 
         y = y.unsqueeze(-1) # b*1
         mask = torch.eq(y, y.T).to(f_s.device) # positive pairs
-        align_loss = (dist[mask] * w[mask]).sum() / w[mask].sum()
+        align_loss = (dist_squared[mask] * w[mask]).sum() / w[mask].sum()
         return align_loss
 
-    def uniform_loss(self, f):
+    def uniform_loss(self, f, alpha=None):
+        # Case 1: Euclidean manifold
+        # if self.manifold is None and alpha is None:
+        #     u_loss = torch.pdist(f, p=2).pow(2).mul(-2).exp().mean().log()
+        
+        # Case 2: Finsler spaces and Euclidean Manifold
         if self.manifold is None:
-            u_loss = torch.pdist(f, p=2).pow(2).mul(-2).exp().mean().log()
-        else:
+            pairwise = euclidean_dist(f, f, alpha)  # (B, B)
+            idx = torch.triu_indices(
+                pairwise.size(0), 
+                pairwise.size(1), 
+                offset=1, 
+                device=f.device,
+            )
+            pairwise = pairwise[idx[0], idx[1]]
+            u_loss = pairwise.pow(2).mul(-2).exp().mean().log()
+
+        # Case 3: Non-euclidean manifold
+        elif self.manifold is not None:
             pairwise = self.manifold.dist(
                 f.unsqueeze(1),
                 f.unsqueeze(0),
@@ -210,19 +236,26 @@ class BAUTrainer(object):
             )
             pairwise = pairwise[idx[0], idx[1]]
             u_loss = pairwise.pow(2).mul(-2).exp().mean().log()
-        
+
+        else:
+            raise ValueError("Invalid manifold/alpha configuration for uniform loss.")
         return u_loss
 
-    def domain_loss(self, f, c, dids):
+    def domain_loss(self, f, c, dids, alpha=None):
         m, n = f.size(0), c.size(0)
+        # Case 1: Euclidean manifold
+        # if self.manifold is None and alpha is None:
+        #     dist_squared = euclidean_dist(f, c).pow(2)
+        
+        # Case 2: Finsler spaces and Euclidean Manifold
         if self.manifold is None:
-            xx = torch.pow(f, 2).sum(1, keepdim=True).expand(m, n)
-            yy = torch.pow(c, 2).sum(1, keepdim=True).expand(n, m).t()
-            dist = xx + yy - 2 * f @ c.t() # m*n
-        else:
+            dist_squared = euclidean_dist(f, c, alpha).pow(2)
+
+        # Case 3: Non-euclidean manifold
+        elif self.manifold is not None:
             chunk_size = self.manifold_chunk_size
             if chunk_size is None:
-                dist = self.manifold.dist(
+                dist_squared = self.manifold.dist(
                     f.unsqueeze(1),
                     c.unsqueeze(0),
                     dim=-1,
@@ -230,23 +263,26 @@ class BAUTrainer(object):
             else:
                 if chunk_size <= 0:
                     raise ValueError("manifold_chunk_size must be None or a positive integer")
-                dist = torch.empty(m, n, device=f.device, dtype=f.dtype)
+                dist_squared = torch.empty(m, n, device=f.device, dtype=f.dtype)
                 f_unsqueezed = f.unsqueeze(1)
                 for i in range(0, n, chunk_size):
                     end = min(i + chunk_size, n)
                     c_chunk = c[i:end]
-                    dist_chunk = self.manifold.dist(
+                    dist_squared_chunk = self.manifold.dist(
                         f_unsqueezed,
                         c_chunk.unsqueeze(0),
                         dim=-1,
                     ).pow(2)
-                    dist[:, i:end] = dist_chunk
+                    dist_squared[:, i:end] = dist_squared_chunk
+
+        else:
+            raise ValueError("Invalid manifold/alpha configuration for domain loss.")
 
         domain_mask = torch.eq(dids.unsqueeze(-1), self.memory_bank.labels).float().cuda() # same domain
-        sorted_dist, indices = torch.sort(dist + (9999999.) * (1-domain_mask), dim=1, descending=False)
+        sorted_dist, indices = torch.sort(dist_squared + (9999999.) * (1-domain_mask), dim=1, descending=False)
 
         # Explicitly delete the large distance matrix to free memory for the next steps
-        del dist
+        del dist_squared
         torch.cuda.empty_cache()
 
         sorted_dist = sorted_dist[:, 1:m+1] # different class
