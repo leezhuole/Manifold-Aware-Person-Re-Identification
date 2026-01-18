@@ -28,14 +28,6 @@ def euclidean_dist(x: torch.Tensor, y: torch.Tensor, alpha=None) -> torch.Tensor
 	
 	if alpha is not None:
 		assert alpha < 1 		# Sanity Check 
-		# y_subtract_x = y.unsqueeze(0).expand(m, n, -1) - x.unsqueeze(1).expand(m, n, -1) # (m, n, D)
-		# omega_vec = torch.zeros(d, device=x.device)
-		# omega_vec[-1] = alpha
-		# finsler_term = y_subtract_x @ omega_vec
-		
-		# Only the last coordinate contributes because omega = [0, ..., 0, alpha].
-		# Avoid materializing the full (m, n, D) tensor by computing the last-dim
-		# difference directly: (y_last - x_last) * alpha -> shape (m, n).
 		y_last = y[:, -1].unsqueeze(0) 	# (1, n)
 		x_last = x[:, -1].unsqueeze(1) 	# (m, 1)
 		finsler_term = (y_last - x_last) * alpha
@@ -61,6 +53,7 @@ def euclidean_dist(x: torch.Tensor, y: torch.Tensor, alpha=None) -> torch.Tensor
 			if diff.max() > 1e-7:  # Tolerance for float32 additions
 				print(f"[DEBUG CRITICAL] alpha=0 distance matrix mismatch! Max diff: {diff.max().item()}")
 		
+		print(f"[DEBUG] alpha=0 sanity check completed.")
 		dist = dist + finsler_term
 
 	return dist

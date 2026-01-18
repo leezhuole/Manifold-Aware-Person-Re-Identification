@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=bau-finsler                # Job name
-#SBATCH --array=0-14                          # One task per alpha/run combo (3 alphas * 5 runs)
+#SBATCH --array=0-4                          # One task per alpha/run combo (3 alphas * 5 runs)
 #SBATCH --gres=gpu:1,VRAM:28G                 # Request one 48GB-class GPU (reduce OOM risk)
 #SBATCH --nodes=1                             # Run all processes on a single node
 #SBATCH --cpus-per-task=5                     # Number of CPU cores per task
@@ -17,6 +17,7 @@ mkdir -p logs/finsler_alphaRNG
 # Activate the environment
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate BAU
+export PYTHONPATH=/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification
 
 # Base hyper-parameters (shared across jobs)
 ARCH=resnet50                   # Default
@@ -28,7 +29,7 @@ WARMUP_STEP=10                  # Default
 EPOCHS=60                       # Default
 
 # Finsler alpha values (sweep narrowed to three)
-ALPHAS=(0.0 0.1 0.5)
+ALPHAS=(None)
 RUNS_PER_ALPHA=5
 
 ALPHA_INDEX=$((SLURM_ARRAY_TASK_ID / RUNS_PER_ALPHA))
@@ -43,9 +44,6 @@ echo "Starting finsler task ${SLURM_ARRAY_TASK_ID} | Alpha ${ALPHA} | Run ${RUN_
 echo "Logs dir: ${LOGS_DIR}"
 
 mkdir -p "${LOGS_DIR}"
-
-# Ensure local repo is on Python path for srun processes
-export PYTHONPATH=/home/stud/leez/reid/src/bau_finsler
 
 srun --unbuffered python examples/train_bau.py \
   -a "${ARCH}" \

@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=bau-ablation-fins             # Job name
-#SBATCH --array=0-14                             # 5 loss configs * 5 runs each (mean/variance per config)
+#SBATCH --array=0-14                             # 5 loss configs * 3 runs each (mean/variance per config)
 #SBATCH --gres=gpu:1,VRAM:28G                   # Request two 24GB-class GPUs 
 #SBATCH --nodes=1                               # Run all processes on a single node
 #SBATCH --cpus-per-task=5                       # Number of CPU cores per task
-#SBATCH --mem=36G                               # Total memory for the entire job
+#SBATCH --mem=24G                               # Total memory for the entire job
 #SBATCH --time=12:00:00                         # Time limit hrs:min:sec
 #SBATCH --exclude=node7,node9,node1,node13    # Exclude problematic nodes
 # #SBATCH --constraint="GPU_MODEL:a40"          # Ensure A40-class GPU
@@ -19,7 +19,7 @@ source ~/miniconda3/etc/profile.d/conda.sh
 conda activate BAU
 
 # Ensure local repo is on Python path for srun processes
-export PYTHONPATH=/home/stud/leez/reid/src/bau_finsler
+export PYTHONPATH=/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification
 
 # Base hyper-parameters (shared across jobs)
 ARCH=resnet50                   # Default
@@ -33,18 +33,22 @@ ALPHA=0.0                       # Finsler alpha value
 
 # Loss configurations (ordered to match paper rows)
 LOSS_CONFIGS=(
-  "--no-align --no-uniform --no-domain --no-triplet --prob 0.0"   # L_ce
-  "--no-align --no-uniform --no-domain --no-ce --prob 0.0"        # L_triplet
-  "--no-ce --no-uniform --no-domain --no-triplet"                 # L_align
+  "--no-align --no-uniform --no-domain --no-triplet"   # L_ce
+  "--no-align --no-uniform --no-domain --no-ce"        # L_triplet
+  "--no-ce --no-uniform --no-domain --no-triplet"      # L_align
+  "--no-align --no-ce --no-domain --no-triplet"       # L_uniform
+  "--no-align --no-uniform --no-ce --no-triplet"      # L_domain
 )
 LOSS_NAMES=(                                                         
   "L_ce"
   "L_triplet"
   "L_align"
+  "L_uniform"
+  "L_domain"
 )
 
 # Number of repeated runs per loss config for mean/variance estimation
-RUNS_PER_CONFIG=5
+RUNS_PER_CONFIG=3
 
 # Determine indices for this task
 LOSS_IDX=$((SLURM_ARRAY_TASK_ID / RUNS_PER_CONFIG))

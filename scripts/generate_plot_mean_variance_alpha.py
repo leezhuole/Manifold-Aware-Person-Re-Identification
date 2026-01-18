@@ -7,9 +7,9 @@ stores them in a CSV, and produces a dual-axis plot (mAP on the left, Rank-1 on
 the right) over alpha. The design follows the publication-style template
 provided by the user.
 
-python scripts/generate_plot.py \
-    --log-root /home/stud/leez/reid/src/bau_finsler/logs/finsler \
-    --output-csv finsler_sweep_results.csv \
+python scripts/generate_plot_mean_variance.py \
+    --log-root /home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/logs/finsler_alphaRNG \
+    --output-csv finsler_sweepRNG_results.csv \
     --output-plot finsler_alpha_sweep.png   
 """
 
@@ -63,6 +63,12 @@ def parse_args() -> argparse.Namespace:
 		choices=["mAP", "Rank-1"],
 		default="mAP",
 		help="Metric used to highlight the optimal alpha (default: mAP)",
+	)
+	parser.add_argument(
+		"--csv-decimals",
+		type=int,
+		default=3,
+		help="Decimal places for floating values in the saved CSV (default: 3)",
 	)
 	return parser.parse_args()
 
@@ -238,27 +244,39 @@ def scan_logs(root_dir: Path) -> Tuple[pd.DataFrame, Optional[Tuple[float, float
 
 	_report_sanity(df)
 
-	# Aggregate by Alpha: calculate mean and std
-	if "Alpha" in df.columns:
-		# Group by Alpha and calculate mean and std for metrics
-		# We want a DataFrame with columns: Alpha, mAP_mean, mAP_std, Rank-1_mean, Rank-1_std
-		agg_df = df.groupby("Alpha")[["mAP", "Rank-1"]].agg(["mean", "std"])
-		
-		# Flatten the MultiIndex columns
-		agg_df.columns = [f"{col[0]}_{col[1]}" for col in agg_df.columns]
-		
-		# Reset index to make Alpha a column again
-		agg_df = agg_df.reset_index()
-		
-		# Sort by Alpha
-		agg_df = agg_df.sort_values("Alpha")
-		
-		# Handle single runs (std will be NaN), replace with 0
-		agg_df = agg_df.fillna(0)
-		
-		return agg_df, baseline
+	return df.sort_values("Alpha"), baseline
 
-	return df, baseline
+
+def compute_alpha_stats(df: pd.DataFrame) -> pd.DataFrame:
+	"""Compute per-alpha mean/std for mAP and Rank-1 (NaN std -> 0)."""
+
+	if df.empty:
+		return df
+
+	agg = df.groupby("Alpha")[["mAP", "Rank-1"]].agg(["mean", "std"])
+	agg.columns = [f"{col[0]}_{col[1]}" for col in agg.columns]
+	agg = agg.reset_index().sort_values("Alpha").fillna(0)
+	return agg
+
+
+def attach_alpha_stats(df_runs: pd.DataFrame, agg_stats: pd.DataFrame) -> pd.DataFrame:
+	"""Attach per-alpha mean/std columns; values shown on the first row of each alpha group."""
+
+	if df_runs.empty:
+		return df_runs
+
+	cols_stats = ["mAP_mean", "mAP_std", "Rank-1_mean", "Rank-1_std"]
+	merged = df_runs.merge(agg_stats, on="Alpha", how="left")
+	merged = merged.sort_values(["Alpha", "LogDir"])
+
+	for _, idx in merged.groupby("Alpha").groups.items():
+		idx_list = list(idx)
+		if len(idx_list) <= 1:
+			continue
+		non_first = idx_list[1:]
+		merged.loc[non_first, cols_stats] = ""
+
+	return merged
 
 
 def _report_sanity(df: pd.DataFrame) -> None:
@@ -422,14 +440,23 @@ def main() -> None:
 		print("[ERROR] No valid metrics found; nothing to plot.")
 		sys.exit(1)
 
+	# Compute per-alpha stats for plotting and tabular display
+	agg_stats = compute_alpha_stats(df)
+	if agg_stats.empty:
+		print("[ERROR] Could not compute per-alpha statistics; aborting.")
+		sys.exit(1)
+
+	csv_df = attach_alpha_stats(df, agg_stats)
+
 	args.output_csv.parent.mkdir(parents=True, exist_ok=True)
-	df.to_csv(args.output_csv, index=False)
+	float_format = f"%.{max(args.csv_decimals, 0)}f"
+	csv_df.to_csv(args.output_csv, index=False, float_format=float_format)
 	print(f"[GEN] CSV saved to {args.output_csv}")
 
 	if baseline is None:
 		print("[WARN] Euclidean baseline (alphaNone) not found; baseline lines omitted.")
 
-	plot_results(df, args.output_plot, opt_metric=args.opt_metric, baseline=baseline)
+	plot_results(agg_stats, args.output_plot, opt_metric=args.opt_metric, baseline=baseline)
 
 
 if __name__ == "__main__":
