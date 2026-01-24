@@ -32,9 +32,10 @@ EPOCHS=60                       # Default
 # Finsler alpha learnable configurations
 ALPHA_INIT=0.0                 # Learnable alpha initial value
 ALPHA_MAX=1.0                  # Learnable alpha max value
-ALPHA_TEMP=100.0                 # Learnable alpha temperature
-LOGS_DIR="$(pwd)/logs/learnableAlpha/job_${SLURM_JOB_ID}_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}"
-WANDB_NAME="learnableAlpha_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}_cuhk03"
+ALPHA_TEMP=1.0                 # Learnable alpha temperature
+
+LOGS_DIR="$(pwd)/logs/learnableAlpha/job_${SLURM_JOB_ID}_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}_monotonicsigmoid"
+WANDB_NAME="learnableAlpha_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}_monosigmoid_cuhk03"
 echo "Starting finsler experimentation | Alpha Init ${ALPHA_INIT} | Alpha Max ${ALPHA_MAX} | Alpha Temp ${ALPHA_TEMP}"
 echo "Logs dir: ${LOGS_DIR}"
 

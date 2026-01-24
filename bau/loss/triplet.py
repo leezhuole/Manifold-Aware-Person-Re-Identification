@@ -27,25 +27,39 @@ class AlphaParameter(nn.Module):
 
 		self.max_alpha = float(max_alpha)
 		self.temperature = float(temperature)
-		self.raw_alpha = nn.Parameter(self._init_raw_alpha(init))
+
+		effective_init = init if init > 1e-3 else 1e-
+		self.raw_alpha = nn.Parameter(self._init_raw_alpha(effective_init))
+		# self.raw_alpha = nn.Parameter(self._init_raw_alpha(init))
 
 	def value(self) -> torch.Tensor:
-		sig = torch.sigmoid(self.raw_alpha / self.temperature)
-		return 2.0 * self.max_alpha * torch.abs(sig - 0.5)
+		# Centered, symmetric parameterization
+		# sig = torch.sigmoid(self.raw_alpha / self.temperature)
+		# val = 2.0 * self.max_alpha * torch.abs(sig - 0.5)
 
+		# Simple monotonic sigmoid (Range: [0, max_alpha]))
+		val = self.max_alpha * torch.sigmoid(self.raw_alpha / self.temperature) 	
+		return val
+	
 	def raw_value(self) -> torch.Tensor:
 		return self.raw_alpha
 
 	def _init_raw_alpha(self, init: float) -> torch.Tensor:
+		if init < 0.0 or init >= 1.0:
+			raise ValueError("Initial alpha must be non-negative and less than 1.0")
+
 		init_clamped = min(max(float(init), 0.0), self.max_alpha)
 		eps = 1e-6
-		if init_clamped <= 0.0:
-			return torch.tensor(eps, dtype=torch.float32)
 
-		y_norm = init_clamped / (2.0 * self.max_alpha)
-		target_sigmoid = y_norm + 0.5
-		target_sigmoid = min(max(target_sigmoid, 0.5 + eps), 1.0 - eps)
-		raw = (torch.log(torch.tensor(target_sigmoid)) - torch.log(torch.tensor(1.0 - target_sigmoid)))
+		# Centered, symmetric parameterization
+		# y_norm = init_clamped / (2.0 * self.max_alpha)
+		# target_sigmoid = y_norm + 0.5
+		# target_sigmoid = min(max(target_sigmoid, 0.5 + eps), 1.0 - eps)
+		# raw = (torch.log(torch.tensor(target_sigmoid)) - torch.log(torch.tensor(1.0 - target_sigmoid)))
+
+		# Simple monotonic sigmoid (Range: [0, max_alpha]))
+		p = init_clamped / self.max_alpha
+		raw = torch.log(torch.tensor(p)) - torch.log(torch.tensor(1.0 - p))
 		return raw * self.temperature
 
 

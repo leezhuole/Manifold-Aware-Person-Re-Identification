@@ -344,12 +344,13 @@ def main_worker(args):
             continue
         params += [{"params": [value], "lr": args.lr, "weight_decay": args.weight_decay}]
     if alpha_module is not None:
-        params += [{"params": alpha_module.parameters(), "lr": args.lr, "weight_decay": 0.0}]
-    # optimizer = torch.optim.Adam(params)
-    optimizer = geoopt.optim.RiemannianAdam(
-        params, 
-        stabilize=10                            # Optional: helps numerical stability for hyperbolic params
-    )
+        alpha_lr_mult = 100.0
+        params += [{"params": alpha_module.parameters(), "lr": args.lr * alpha_lr_mult, "weight_decay": 0.0}]
+    optimizer = torch.optim.Adam(params)
+    # optimizer = geoopt.optim.RiemannianAdam(
+    #     params, 
+    #     stabilize=10                            # Optional: helps numerical stability for hyperbolic params
+    # )
 
     lr_scheduler = WarmupMultiStepLR(optimizer, 
                                      args.milestones, 
