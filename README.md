@@ -13,14 +13,11 @@ All modifications will leverage the `geoopt` library for Riemannian optimizati
 
 **Dependencies to add to `requirements.txt`:**
 
-```
 # For Riemannian optimization and hyperbolic geometry
 # Per , installation from the git repository is preferred
 git+https://github.com/geoopt/geoopt.git
-```
 
 ## 2. Experiment 1 (Low Complexity): Retrofitting a Hyperbolic Classification Head
-
 **Goal:** Establish a baseline integration by adding a hyperbolic classifier on top of the existing _Euclidean_ BAU embeddings, inspired by Khrulkov et al.. This tests the suitability of hyperbolic classification without altering the core BAU metric learning logic.   
 
 **Step-by-Step Implementation:**

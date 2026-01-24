@@ -336,6 +336,7 @@ cython_debug/
 
 # Logs
 logs/
+archive/
 
 # Wandb
 wandb/

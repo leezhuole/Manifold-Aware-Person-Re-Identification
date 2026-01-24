@@ -7,7 +7,7 @@ stores them in a CSV, and produces a dual-axis plot (mAP on the left, Rank-1 on
 the right) over alpha. The design follows the publication-style template
 provided by the user.
 
-python scripts/generate_plot_mean_variance.py \
+python scripts/generate_plot_mean_variance_alpha.py \
     --log-root /home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/logs/finsler_alphaRNG \
     --output-csv finsler_sweepRNG_results.csv \
     --output-plot finsler_alpha_sweep.png   
@@ -163,24 +163,22 @@ def _iter_log_files(run_dir: Path) -> Iterable[Path]:
 	return candidates
 
 
-def scan_logs(root_dir: Path) -> Tuple[pd.DataFrame, Optional[Tuple[float, float]]]:
-	"""Walk run directories, extract metrics, return DataFrame and Euclidean baseline."""
+def scan_logs(root_dir: Path) -> pd.DataFrame:
+	"""Walk run directories, extract metrics, return DataFrame of runs."""
 
 	if not root_dir.exists():
 		print(f"[ERROR] Log directory not found: {root_dir}")
-		return pd.DataFrame(), None
+		return pd.DataFrame()
 
 	dir_pattern = re.compile(r"alpha([0-9.]+)")
 	rows = []
-	baseline: Optional[Tuple[float, float]] = None
-	baseline_mtime: Optional[float] = None
 
 	for child in root_dir.iterdir():
 		if not child.is_dir():
 			continue
 
-		# Handle Euclidean baseline (alphaNone) separately
-		if child.name.endswith("alphaNone"):
+		# Handle Euclidean baseline runs (alphaNone_run*)
+		if "alphaNone" in child.name:
 			log_files = list(_iter_log_files(child))
 			if not log_files:
 				print(f"[WARN] No non-empty log file found in {child.name}; skipping baseline")
@@ -192,10 +190,17 @@ def scan_logs(root_dir: Path) -> Tuple[pd.DataFrame, Optional[Tuple[float, float
 				print(f"[WARN] Missing metrics in baseline {child.name}/{log_file.name}; skipping")
 				continue
 
-			mtime = log_file.stat().st_mtime
-			if baseline is None or (baseline_mtime is not None and mtime > baseline_mtime):
-				baseline = (map_val, rank1_val)
-				baseline_mtime = mtime
+			rows.append(
+				{
+					"Alpha": None,
+					"AlphaLabel": "None",
+					"AlphaOrder": -1.0,
+					"mAP": map_val,
+					"Rank-1": rank1_val,
+					"LogDir": child.name,
+					"LogFile": log_file.name,
+				}
+			)
 			continue
 
 		match = dir_pattern.search(child.name)
@@ -231,6 +236,8 @@ def scan_logs(root_dir: Path) -> Tuple[pd.DataFrame, Optional[Tuple[float, float
 		rows.append(
 			{
 				"Alpha": alpha,
+				"AlphaLabel": f"{alpha:g}",
+				"AlphaOrder": alpha,
 				"mAP": map_val,
 				"Rank-1": rank1_val,
 				"LogDir": child.name,
@@ -240,11 +247,11 @@ def scan_logs(root_dir: Path) -> Tuple[pd.DataFrame, Optional[Tuple[float, float
 
 	df = pd.DataFrame(rows)
 	if df.empty:
-		return df, baseline
+		return df
 
 	_report_sanity(df)
 
-	return df.sort_values("Alpha"), baseline
+	return df.sort_values(["AlphaOrder", "LogDir"]).reset_index(drop=True)
 
 
 def compute_alpha_stats(df: pd.DataFrame) -> pd.DataFrame:
@@ -253,9 +260,9 @@ def compute_alpha_stats(df: pd.DataFrame) -> pd.DataFrame:
 	if df.empty:
 		return df
 
-	agg = df.groupby("Alpha")[["mAP", "Rank-1"]].agg(["mean", "std"])
+	agg = df.groupby(["AlphaOrder", "AlphaLabel"])[["mAP", "Rank-1"]].agg(["mean", "std"])
 	agg.columns = [f"{col[0]}_{col[1]}" for col in agg.columns]
-	agg = agg.reset_index().sort_values("Alpha").fillna(0)
+	agg = agg.reset_index().sort_values("AlphaOrder").fillna(0)
 	return agg
 
 
@@ -266,15 +273,15 @@ def attach_alpha_stats(df_runs: pd.DataFrame, agg_stats: pd.DataFrame) -> pd.Dat
 		return df_runs
 
 	cols_stats = ["mAP_mean", "mAP_std", "Rank-1_mean", "Rank-1_std"]
-	merged = df_runs.merge(agg_stats, on="Alpha", how="left")
-	merged = merged.sort_values(["Alpha", "LogDir"])
+	merged = df_runs.merge(agg_stats, on=["AlphaOrder", "AlphaLabel"], how="left")
+	merged = merged.sort_values(["AlphaOrder", "LogDir"])
 
-	for _, idx in merged.groupby("Alpha").groups.items():
+	for _, idx in merged.groupby(["AlphaOrder", "AlphaLabel"]).groups.items():
 		idx_list = list(idx)
 		if len(idx_list) <= 1:
 			continue
 		non_first = idx_list[1:]
-		merged.loc[non_first, cols_stats] = ""
+		merged.loc[non_first, cols_stats] = np.nan
 
 	return merged
 
@@ -282,7 +289,8 @@ def attach_alpha_stats(df_runs: pd.DataFrame, agg_stats: pd.DataFrame) -> pd.Dat
 def _report_sanity(df: pd.DataFrame) -> None:
 	"""Emit simple sanity checks about coverage and ranges."""
 
-	present = set(df["Alpha"].round(4).tolist())
+	numeric = df[df["Alpha"].notna()]
+	present = set(numeric["Alpha"].round(4).tolist())
 	expected = set(round(a, 4) for a in EXPECTED_ALPHAS)
 	missing = sorted(expected - present)
 	if missing:
@@ -299,97 +307,80 @@ def _report_sanity(df: pd.DataFrame) -> None:
 
 
 def plot_metric(
-	df: pd.DataFrame,
+	df_runs: pd.DataFrame,
+	agg_stats: pd.DataFrame,
 	metric_name: str,
 	output_path: Path,
-	baseline_val: Optional[float] = None,
 	color: str = "#c0392b",
 ) -> None:
 	"""Generate a single-axis plot for the given metric."""
 
 	setup_plot_style()
 
-	is_aggregated = f"{metric_name}_mean" in df.columns
-	alphas = df["Alpha"].to_numpy()
-
-	if is_aggregated:
-		scores = df[f"{metric_name}_mean"].to_numpy()
-		errors = df[f"{metric_name}_std"].to_numpy()
-	else:
-		scores = df[metric_name].to_numpy()
-		errors = None
-
-	positions = np.arange(len(alphas))
+	labels = agg_stats["AlphaLabel"].tolist()
+	positions = np.arange(len(labels))
+	means = agg_stats[f"{metric_name}_mean"].to_numpy()
 
 	fig, ax = plt.subplots(figsize=(8, 6))
 
-	if is_aggregated:
-		ax.errorbar(
-			positions,
-			scores,
-			yerr=errors,
-			marker="o",
-			linestyle="-",
+	# Plot individual runs (no error bars)
+	for idx, (alpha_order, alpha_label) in enumerate(
+		zip(agg_stats["AlphaOrder"], agg_stats["AlphaLabel"])
+	):
+		group = df_runs[(df_runs["AlphaOrder"] == alpha_order) & (df_runs["AlphaLabel"] == alpha_label)]
+		if group.empty:
+			continue
+		y_vals = group[metric_name].to_numpy()
+		x_offsets = np.zeros(len(y_vals))
+		ax.scatter(
+			idx + x_offsets,
+			y_vals,
 			color=color,
-			capsize=5,
-			linewidth=2.5,
-			markersize=8,
+			alpha=0.8,
+			s=45,
+			edgecolor="white",
+			linewidth=0.6,
+			zorder=3,
 		)
-	else:
-		ax.plot(
-			positions,
-			scores,
-			marker="o",
-			linestyle="-",
-			color=color,
-			linewidth=2.5,
-			markersize=8,
-		)
+
+	# Plot mean line
+	ax.plot(
+		positions,
+		means,
+		marker="o",
+		linestyle="-.",
+		color=color,
+		linewidth=2.2,
+		markersize=7,
+		zorder=4,
+	)
 
 	ax.set_xlabel(r"Finsler $\alpha$ (norm of $\omega$)", fontweight="bold")
 	ax.set_ylabel(f"{metric_name} (%)", color=color, fontweight="bold")
 
 	ax.tick_params(axis="y", labelcolor=color)
 	ax.set_xticks(positions)
-	ax.set_xticklabels([f"{a:g}" for a in alphas])
-	ax.set_xlim(-0.5, len(alphas) - 0.5)
+	ax.set_xticklabels(labels)
+	ax.set_xlim(-0.5, len(labels) - 0.5)
 
 	ax.grid(True, linestyle=":", alpha=0.6)
-	title_suffix = "(Mean \u00B1 Std)" if is_aggregated else ""
-	ax.set_title(f"Effect of Finsler alpha on {metric_name} {title_suffix}", pad=14, fontweight="bold")
-
-	# Baseline
-	if baseline_val is not None:
-		baseline_color = "#4d5656"
-		ax.axhline(
-			baseline_val,
-			color=baseline_color,
-			linestyle="-.",
-			linewidth=1.6,
-			alpha=0.85,
-			zorder=1,
-		)
-		ax.text(
-			len(alphas) - 0.45,
-			baseline_val,
-			f"Euclidean {metric_name}",
-			color=baseline_color,
-			fontsize=10,
-			ha="right",
-			va="bottom",
-		)
+	ax.set_title(
+		f"Effect of Finsler alpha on {metric_name} (Runs + Mean)",
+		pad=14,
+		fontweight="bold",
+	)
 
 	# Highlight optimal
-	best_idx = scores.argmax()
-	best_alpha = alphas[best_idx]
-	best_score = scores[best_idx]
+	best_idx = means.argmax()
+	best_alpha = labels[best_idx]
+	best_score = means[best_idx]
 	best_pos = positions[best_idx]
 
 	ax.axvline(best_pos, color="gray", linestyle=":", linewidth=1.5, alpha=0.7)
 	ax.scatter([best_pos], [best_score], color=color, zorder=5, s=100, edgecolor='white')
 
 	ax.annotate(
-		f"opt @ {best_alpha:g}\n{metric_name}={best_score:.1f}%",
+		f"opt @ {best_alpha}\n{metric_name}={best_score:.1f}%",
 		xy=(best_pos, best_score),
 		xytext=(0.95, 0.9),
 		textcoords="axes fraction",
@@ -410,10 +401,10 @@ def plot_metric(
 
 
 def plot_results(
-	df: pd.DataFrame,
+	df_runs: pd.DataFrame,
+	agg_stats: pd.DataFrame,
 	output_path: Path,
 	opt_metric: str = "mAP",
-	baseline: Optional[Tuple[float, float]] = None,
 ) -> None:
 	"""Generate separate plots for mAP and Rank-1."""
 
@@ -423,19 +414,17 @@ def plot_results(
 
 	# mAP Plot
 	map_path = parent / f"{base_name}_mAP{extension}"
-	baseline_map = baseline[0] if baseline else None
-	plot_metric(df, "mAP", map_path, baseline_map, color="#c0392b")
+	plot_metric(df_runs, agg_stats, "mAP", map_path, color="#c0392b")
 
 	# Rank-1 Plot
 	rank1_path = parent / f"{base_name}_Rank1{extension}"
-	baseline_rank1 = baseline[1] if baseline else None
-	plot_metric(df, "Rank-1", rank1_path, baseline_rank1, color="#1f618d")
+	plot_metric(df_runs, agg_stats, "Rank-1", rank1_path, color="#1f618d")
 
 
 def main() -> None:
 	args = parse_args()
 
-	df, baseline = scan_logs(args.log_root)
+	df = scan_logs(args.log_root)
 	if df.empty:
 		print("[ERROR] No valid metrics found; nothing to plot.")
 		sys.exit(1)
@@ -453,10 +442,7 @@ def main() -> None:
 	csv_df.to_csv(args.output_csv, index=False, float_format=float_format)
 	print(f"[GEN] CSV saved to {args.output_csv}")
 
-	if baseline is None:
-		print("[WARN] Euclidean baseline (alphaNone) not found; baseline lines omitted.")
-
-	plot_results(agg_stats, args.output_plot, opt_metric=args.opt_metric, baseline=baseline)
+	plot_results(df, agg_stats, args.output_plot, opt_metric=args.opt_metric)
 
 
 if __name__ == "__main__":

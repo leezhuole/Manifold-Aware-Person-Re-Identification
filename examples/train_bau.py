@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 from bau import datasets
 from bau import models
 from bau.trainers import BAUTrainer
+from bau.loss.triplet import AlphaParameter
 from bau.models.memory import MemoryBank
 from bau.evaluators import Evaluator, extract_features
 from bau.utils.data import IterLoader, MultiSourceTrainDataset
@@ -210,11 +211,21 @@ def main_worker(args):
     model = create_model(args, num_classes=num_classes, manifold=manifold)
     log("Created model and moved to device", level=2)
 
+    alpha_init = args.alpha_init if args.alpha_init is not None else args.alpha    
+    alpha_module = None
+    if args.alpha_init is not None:
+        alpha_module = AlphaParameter(
+            init=args.alpha_init,
+            max_alpha=args.alpha_max,
+            temperature=args.alpha_temp,
+        ).cuda()
+        log(f"Initialized learnable alpha (init={args.alpha_init}, max={args.alpha_max}, temp={args.alpha_temp})", level=1)
+
     if args.fine_tuning:
         if args.checkpoint_path and osp.exists(args.checkpoint_path):
             log(f"Loading checkpoint from {args.checkpoint_path} for fine-tuning", level=1)
             checkpoint = torch.load(args.checkpoint_path)
-            state_dict = checkpoint.get('state_dict', checkpoint)
+            state_dict = checkpoint.get('state_dict', checkpoint) if isinstance(checkpoint, dict) else checkpoint
             
             model_dict = model.state_dict()
             new_state_dict = {}
@@ -235,6 +246,17 @@ def main_worker(args):
                         log(f"Skipping layer {k} due to shape mismatch: {v.shape} vs {model_dict[target_k].shape}", level=1)
             
             model.load_state_dict(new_state_dict, strict=False)
+            log("Model checkpoint loaded", level=1)
+
+            if isinstance(checkpoint, dict) and 'alpha_state' in checkpoint:
+                if alpha_module is None:
+                    alpha_module = AlphaParameter(
+                        init=0.0,
+                        max_alpha=args.alpha_max,
+                        temperature=args.alpha_temp,
+                    ).cuda()
+                alpha_module.load_state_dict(checkpoint['alpha_state'])
+                log("Loaded alpha state from checkpoint", level=1)
             
             # Freeze backbone
             if isinstance(model, torch.nn.DataParallel):
@@ -312,7 +334,7 @@ def main_worker(args):
     log("Freed temporary dataset references", level=2)
 
     # evaluator
-    evaluator = Evaluator(model)
+    evaluator = Evaluator(model, alpha_module=alpha_module)
     log("Initialized evaluator", level=2)
 
     # optimizer
@@ -321,6 +343,8 @@ def main_worker(args):
         if not value.requires_grad:
             continue
         params += [{"params": [value], "lr": args.lr, "weight_decay": args.weight_decay}]
+    if alpha_module is not None:
+        params += [{"params": alpha_module.parameters(), "lr": args.lr, "weight_decay": 0.0}]
     # optimizer = torch.optim.Adam(params)
     optimizer = geoopt.optim.RiemannianAdam(
         params, 
@@ -349,7 +373,8 @@ def main_worker(args):
                          use_domain=not args.no_domain, 
                          use_triplet=not args.no_triplet,
                          use_ce=not args.no_ce,
-                         alpha=args.alpha)
+                         alpha=alpha_init,
+                         alpha_module=alpha_module)
     
     log("Trainer constructed", level=2)
 
@@ -362,6 +387,18 @@ def main_worker(args):
         log(f"Epoch {epoch + 1}/{args.epochs} - training step completed", level=2)
         lr_scheduler.step()
         log(f"Epoch {epoch + 1}/{args.epochs} - scheduler stepped", level=2)
+
+        if wandb is not None and getattr(wandb, "run", None) is not None and alpha_module is not None:
+            try:
+                alpha_value = float(alpha_module.value().detach().cpu())
+                raw_alpha_value = float(alpha_module.raw_value().detach().cpu())
+                wandb.log({'alpha/value': alpha_value, 'alpha/raw': raw_alpha_value, 'epoch': epoch})
+                log(
+                    f"Logged alpha values: alpha={alpha_value:.4f}, raw={raw_alpha_value:.4f}",
+                    level=2,
+                )
+            except Exception:
+                pass
 
         if (epoch+1 in args.eval_epochs) or (epoch == args.epochs-1):
             with torch.no_grad():
@@ -392,18 +429,30 @@ def main_worker(args):
                         pass
                 if mAP > best_mAP:
                     best_mAP = mAP
-                    torch.save(model.state_dict(), osp.join(args.logs_dir, 'best.pth'))
+                    checkpoint_payload = {'state_dict': model.state_dict()}
+                    if alpha_module is not None:
+                        checkpoint_payload['alpha_state'] = alpha_module.state_dict()
+                    torch.save(checkpoint_payload, osp.join(args.logs_dir, 'best.pth'))
                     log(f"New best mAP achieved: {best_mAP:.4f}", level=1)
                 print('current mAP: {:5.1%}  best mAP: {:5.1%}'.format(mAP, best_mAP))
         else:
             log(f"Epoch {epoch + 1}/{args.epochs} - skipping evaluation", level=2)
 
-    torch.save(model.state_dict(), osp.join(args.logs_dir, 'last.pth'))
+    checkpoint_payload = {'state_dict': model.state_dict()}
+    if alpha_module is not None:
+        checkpoint_payload['alpha_state'] = alpha_module.state_dict()
+    torch.save(checkpoint_payload, osp.join(args.logs_dir, 'last.pth'))
     log("Saved final model checkpoint", level=1)
 
     # results
-    model.load_state_dict(torch.load(osp.join(args.logs_dir, 'best.pth')))
+    best_checkpoint = torch.load(osp.join(args.logs_dir, 'best.pth'))
+    state_dict = best_checkpoint.get('state_dict', best_checkpoint) if isinstance(best_checkpoint, dict) else best_checkpoint
+    model.load_state_dict(state_dict)
+    if alpha_module is not None and isinstance(best_checkpoint, dict) and 'alpha_state' in best_checkpoint:
+        alpha_module.load_state_dict(best_checkpoint['alpha_state'])
+        log(f"Best model alpha value: {float(alpha_module.value().detach().cpu()):.4f}", level=1)
     log("Loaded best model for final evaluation", level=2)
+
     with torch.no_grad():
         final_results = evaluator.evaluate(test_loader, test_dataset.query, test_dataset.gallery, cmc_flag=True)
     if wandb is not None and getattr(wandb, "run", None) is not None:
@@ -426,7 +475,7 @@ def main_worker(args):
             if cmc_scores is not None:
                 for rank, score in enumerate(cmc_scores, start=1):
                     if rank in [1, 5, 10]:
-                        log_dict[f'eval/CMC_top_{rank}'] = score
+                        log_dict[f'final/CMC_top_{rank}'] = score
             if final_visfig is not None:
                 final_fig = getattr(final_visfig, 'figure', None)
                 if final_fig is not None:
@@ -500,7 +549,10 @@ if __name__ == '__main__':
                         help="chunk size for manifold distance computation; set to 'none' to disable chunking")
 
     # finsler manifolds (Rander's metric)
-    parser.add_argument('--alpha', type=parse_optional_float, default=None, help='alpha parameter for Finsler manifold (Rander metric)')
+    parser.add_argument('--alpha', type=parse_optional_float, default=None, help='static alpha for Finsler manifold')
+    parser.add_argument('--alpha-init', type=parse_optional_float, default=None, help='initial alpha value for Finsler manifold (learnable if set)')
+    parser.add_argument('--alpha-max', type=float, default=1.0, help='max alpha for scaled sigmoid')
+    parser.add_argument('--alpha-temp', type=float, default=1.0, help='temperature for scaled sigmoid')
     
     # fine-tuning
     parser.add_argument('--fine-tuning', type=lambda x: x.lower() == 'true', default=False, help='fine-tune the model')

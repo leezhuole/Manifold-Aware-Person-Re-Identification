@@ -23,14 +23,21 @@ except Exception:  # pragma: no cover - wandb is optional
 
 class BAUTrainer(object):
     def __init__(self, model, memory_bank, num_classes, margin, lam=1.5, k=10, manifold=None, manifold_chunk_size=None,
-                 use_aug_ce=False, use_align=True, use_uniform=True, use_domain=True, use_triplet=True, use_ce=True, alpha=None):
+                 use_aug_ce=False, use_align=True, use_uniform=True, use_domain=True, use_triplet=True, use_ce=True,
+                 alpha=None, alpha_module=None):
+        
+        """
+        Note that static alpha is not used during training. It is only set as a default when no alpha_module is provided
+        
+        """
         
         super(BAUTrainer, self).__init__()
         self.model = model
         self.memory_bank = memory_bank
         
         self.criterion_ce = CrossEntropyLabelSmooth(num_classes=num_classes).cuda()
-        self.criterion_tri = TripletLoss(margin=margin, manifold=manifold, alpha=alpha).cuda()
+        static_alpha = None if alpha_module is not None else alpha
+        self.criterion_tri = TripletLoss(margin=margin, manifold=manifold, alpha=static_alpha).cuda()
         self.scaler = GradScaler()
 
         self.lam = lam
@@ -47,6 +54,12 @@ class BAUTrainer(object):
 
         # Finsler space parameter
         self.alpha = alpha
+        self.alpha_module = alpha_module
+
+    def _get_alpha_value(self):
+        if self.alpha_module is None:
+            return self.alpha
+        return self.alpha_module.value()
 
     def train(self, epoch, train_loader, optimizer, iters, print_freq=1):
         self.model.train()
@@ -105,14 +118,16 @@ class BAUTrainer(object):
                 if self.use_aug_ce:
                     loss_ce += self.criterion_ce(logits_s, pids) 
                 
-                loss_tri = self.criterion_tri(emb_w, pids) if self.use_triplet else torch.tensor(0.0).cuda()
+                alpha_value = self._get_alpha_value()
+
+                loss_tri = self.criterion_tri(emb_w, pids, alpha=alpha_value) if self.use_triplet else torch.tensor(0.0).cuda()
                 
-                loss_align = self.align_loss(f_w, f_s, pids, weight, self.alpha) if self.use_align else torch.tensor(0.0).cuda()
+                loss_align = self.align_loss(f_w, f_s, pids, weight, alpha_value) if self.use_align else torch.tensor(0.0).cuda()
                 
-                loss_uniform = 0.5*(self.uniform_loss(f_w, self.alpha) + self.uniform_loss(f_s, self.alpha)) if self.use_uniform else torch.tensor(0.0).cuda()
+                loss_uniform = 0.5*(self.uniform_loss(f_w, alpha_value) + self.uniform_loss(f_s, alpha_value)) if self.use_uniform else torch.tensor(0.0).cuda()
                 
-                loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids, self.alpha) +
-                                   self.domain_loss(f_s, self.memory_bank.features, dids, self.alpha)) if self.use_domain else torch.tensor(0.0).cuda()
+                loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids, alpha_value) +
+                                   self.domain_loss(f_s, self.memory_bank.features, dids, alpha_value)) if self.use_domain else torch.tensor(0.0).cuda()
 
                 with torch.no_grad():
                     self.memory_bank.momentum_update(f_w, pids)

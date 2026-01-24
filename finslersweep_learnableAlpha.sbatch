@@ -1,5 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=bau-finsler                # Job name
+#SBATCH --array=0-5                           # One task per alpha_init value
 #SBATCH --gres=gpu:1,VRAM:28G                 # Request one 28GB-class GPU (reduce OOM risk)
 #SBATCH --nodes=1                             # Run all processes on a single node
 #SBATCH --cpus-per-task=5                     # Number of CPU cores per task
@@ -30,10 +31,13 @@ WARMUP_STEP=10                  # Default
 EPOCHS=60                       # Default
 
 # Finsler alpha learnable configurations
-ALPHA_INIT=0.0                 # Learnable alpha initial value
+ALPHA_INITS=(0.1 0.2 0.3 0.5 0.7 0.9)
 ALPHA_MAX=1.0                  # Learnable alpha max value
-ALPHA_TEMP=100.0                 # Learnable alpha temperature
-LOGS_DIR="$(pwd)/logs/learnableAlpha/job_${SLURM_JOB_ID}_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}"
+ALPHA_TEMP=1.0                 # Learnable alpha temperature
+
+ALPHA_INIT=${ALPHA_INITS[SLURM_ARRAY_TASK_ID]}
+
+LOGS_DIR="$(pwd)/logs/learnableAlpha/job_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}"
 WANDB_NAME="learnableAlpha_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}_cuhk03"
 echo "Starting finsler experimentation | Alpha Init ${ALPHA_INIT} | Alpha Max ${ALPHA_MAX} | Alpha Temp ${ALPHA_TEMP}"
 echo "Logs dir: ${LOGS_DIR}"

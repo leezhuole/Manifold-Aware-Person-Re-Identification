@@ -1,17 +1,18 @@
 #!/bin/bash
 #SBATCH --job-name=bau-finsler                # Job name
-#SBATCH --gres=gpu:1,VRAM:28G                 # Request one 28GB-class GPU (reduce OOM risk)
+#SBATCH --array=0-4                          # One task per alpha/run combo (3 alphas * 5 runs)
+#SBATCH --gres=gpu:1,VRAM:28G                 # Request one 48GB-class GPU (reduce OOM risk)
 #SBATCH --nodes=1                             # Run all processes on a single node
 #SBATCH --cpus-per-task=5                     # Number of CPU cores per task
 #SBATCH --mem=24G                             # Total memory for the entire job
 #SBATCH --time=12:00:00                       # Time limit hrs:min:sec per task
 #SBATCH --exclude=node7,node9,node1,node13    # Exclude problematic nodes
 # #SBATCH --constraint="GPU_MODEL:a40"          # Ensure specific GPU model if available
-#SBATCH --output=logs/fins_learnableAlpha/finsler-%j.out          # Standard output log
-#SBATCH --error=logs/fins_learnableAlpha/finsler-%j.err           # Error log
+#SBATCH --output=logs/finslerRNG-%A_%a.out       # Standard output log per array task
+#SBATCH --error=logs/finslerRNG-%A_%a.err        # Error log per array task
 
 set -euo pipefail
-mkdir -p logs/learnableAlpha
+mkdir -p logs/finsler_alphaRNG
 
 # Activate the environment
 source ~/miniconda3/etc/profile.d/conda.sh
@@ -29,13 +30,19 @@ ITERS=500                       # Default
 WARMUP_STEP=10                  # Default
 EPOCHS=60                       # Default
 
-# Finsler alpha learnable configurations
-ALPHA_INIT=0.0                 # Learnable alpha initial value
-ALPHA_MAX=1.0                  # Learnable alpha max value
-ALPHA_TEMP=100.0                 # Learnable alpha temperature
-LOGS_DIR="$(pwd)/logs/learnableAlpha/job_${SLURM_JOB_ID}_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}"
-WANDB_NAME="learnableAlpha_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}_cuhk03"
-echo "Starting finsler experimentation | Alpha Init ${ALPHA_INIT} | Alpha Max ${ALPHA_MAX} | Alpha Temp ${ALPHA_TEMP}"
+# Finsler alpha values (sweep narrowed to three)
+ALPHAS=None
+RUNS_PER_ALPHA=5
+
+ALPHA_INDEX=$((SLURM_ARRAY_TASK_ID / RUNS_PER_ALPHA))
+RUN_INDEX=$((SLURM_ARRAY_TASK_ID % RUNS_PER_ALPHA + 1))
+ALPHA=${ALPHAS[ALPHA_INDEX]}
+
+RUN_TAG="alpha${ALPHA}_run${RUN_INDEX}"
+LOGS_DIR="$(pwd)/logs/finsler_alphaRNG/job_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}_${RUN_TAG}"
+WANDB_NAME="${RUN_TAG}"
+
+echo "Starting finsler task ${SLURM_ARRAY_TASK_ID} | Alpha ${ALPHA} | Run ${RUN_INDEX}"
 echo "Logs dir: ${LOGS_DIR}"
 
 mkdir -p "${LOGS_DIR}"
@@ -52,7 +59,4 @@ srun --unbuffered python examples/train_bau.py \
   --logs-dir "${LOGS_DIR}" \
   --wandb-name "${WANDB_NAME}" \
   --verbosity 2 \
-  --alpha-init "${ALPHA_INIT}" \
-  --alpha-max "${ALPHA_MAX}" \
-  --alpha-temp "${ALPHA_TEMP}"
-
+  --alpha "${ALPHA}"

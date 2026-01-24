@@ -7,6 +7,48 @@ from torch import nn
 import torch.nn.functional as F
 
 
+class AlphaParameter(nn.Module):
+	"""
+	Learnable global alpha with centered parameterization.
+
+	Mapping:
+		alpha = 2 * max_alpha * |sigmoid(raw / temperature) - 0.5|
+
+	This ensures alpha = 0 at raw = 0 (Euclidean baseline), while still
+	keeping alpha within [0, max_alpha].
+	"""
+
+	def __init__(self, init: float = 0.0, max_alpha: float = 1.0, temperature: float = 1.0):
+		super().__init__()
+		if max_alpha <= 0 or max_alpha > 1:
+			raise ValueError("max_alpha must be positive and in (0, 1]")
+		if temperature <= 0:
+			raise ValueError("temperature must be positive")
+
+		self.max_alpha = float(max_alpha)
+		self.temperature = float(temperature)
+		self.raw_alpha = nn.Parameter(self._init_raw_alpha(init))
+
+	def value(self) -> torch.Tensor:
+		sig = torch.sigmoid(self.raw_alpha / self.temperature)
+		return 2.0 * self.max_alpha * torch.abs(sig - 0.5)
+
+	def raw_value(self) -> torch.Tensor:
+		return self.raw_alpha
+
+	def _init_raw_alpha(self, init: float) -> torch.Tensor:
+		init_clamped = min(max(float(init), 0.0), self.max_alpha)
+		eps = 1e-6
+		if init_clamped <= 0.0:
+			return torch.tensor(eps, dtype=torch.float32)
+
+		y_norm = init_clamped / (2.0 * self.max_alpha)
+		target_sigmoid = y_norm + 0.5
+		target_sigmoid = min(max(target_sigmoid, 0.5 + eps), 1.0 - eps)
+		raw = (torch.log(torch.tensor(target_sigmoid)) - torch.log(torch.tensor(1.0 - target_sigmoid)))
+		return raw * self.temperature
+
+
 def euclidean_dist(x: torch.Tensor, y: torch.Tensor, alpha=None) -> torch.Tensor:
 	"""
 	Compute euclidean distance between x and y. This distance function transforms to the canonical 
@@ -27,33 +69,12 @@ def euclidean_dist(x: torch.Tensor, y: torch.Tensor, alpha=None) -> torch.Tensor
 	dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability
 	
 	if alpha is not None:
-		assert alpha < 1 		# Sanity Check 
+		if isinstance(alpha, torch.Tensor) and alpha.device != dist.device:
+			alpha = alpha.to(device=dist.device)
 		y_last = y[:, -1].unsqueeze(0) 	# (1, n)
 		x_last = x[:, -1].unsqueeze(1) 	# (m, 1)
 		finsler_term = (y_last - x_last) * alpha
 		assert finsler_term.shape == dist.shape, "Finsler term shape mismatch"
-		
-		# DEBUG: Sanity check for alpha=0
-		if alpha == 0:
-			# If everything is correct, dist + finsler_term should be identical to dist, or at least
-			# within a tiny float tolerarnce.
-
-			# 1. Check for NaNs (e.g., if inputs had Inf, Inf * 0 = NaN)
-			if torch.isnan(finsler_term).any():
-				print(f"[DEBUG CRITICAL] alpha=0 but Finsler term contains NaNs! Check inputs for Infinity.")
-
-			# 2. Check for values > 0 (should all be zeros)
-			if not torch.allclose(finsler_term, torch.zeros_like(finsler_term)):
-				max_val = finsler_term.abs().max().item()
-				print(f"[DEBUG CRITICAL] alpha=0 but Finsler term is not zero! Max absolute value: {max_val}")
-
-			# 3. Direct comparison of before/after distance matrices
-			new_dist = dist + finsler_term
-			diff = (dist - new_dist).abs()
-			if diff.max() > 1e-7:  # Tolerance for float32 additions
-				print(f"[DEBUG CRITICAL] alpha=0 distance matrix mismatch! Max diff: {diff.max().item()}")
-		
-		print(f"[DEBUG] alpha=0 sanity check completed.")
 		dist = dist + finsler_term
 
 	return dist
@@ -117,9 +138,17 @@ class TripletLoss(nn.Module):
 		else:
 			self.margin_loss = nn.SoftMarginLoss()
 
-	def forward(self, emb, label):
+	def forward(self, emb, label, alpha=None):
+		"""
+		Note that we define the input argument alpha here as the override value for Rander's alpha.
+		Intended to be used by the trainer each step, which is passed into forward() during training.
+
+		self.alpha is used as the default value if no override is provided (e.g., fixed or module-provided alpha).
+
+		"""
 		# Sanity checks
-		if self.manifold is not None and self.alpha is not None:
+		alpha_value = self.alpha if alpha is None else alpha
+		if self.manifold is not None and alpha_value is not None:
 			raise ValueError("Finsler spaces is not supported for non-euclidean manifolds.")
 
 		# Case 1: Finsler spaces and Euclidean spaces
@@ -127,7 +156,7 @@ class TripletLoss(nn.Module):
 			if self.normalize_feature:
 				# equal to cosine similarity
 				emb = F.normalize(emb)
-			mat_dist = euclidean_dist(x=emb, y=emb, alpha=self.alpha)
+			mat_dist = euclidean_dist(x=emb, y=emb, alpha=alpha_value)
 		
 		# Case 2: Non-euclidean manifold		
 		else:
