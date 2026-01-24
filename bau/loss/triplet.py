@@ -60,6 +60,8 @@ def euclidean_dist(x: torch.Tensor, y: torch.Tensor, alpha=None) -> torch.Tensor
 			diff = (dist - new_dist).abs()
 			if diff.max() > 1e-7:  # Tolerance for float32 additions
 				print(f"[DEBUG CRITICAL] alpha=0 distance matrix mismatch! Max diff: {diff.max().item()}")
+
+			print(f"[DEBUG] alpha=0 sanity check completed.")
 		
 		dist = dist + finsler_term
 

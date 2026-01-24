@@ -7,10 +7,11 @@ stores them in a CSV, and produces a dual-axis plot (mAP on the left, Rank-1 on
 the right) over alpha. The design follows the publication-style template
 provided by the user.
 
-python scripts/generate_plot.py \
-    --log-root /home/stud/leez/reid/src/bau_finsler/logs/finsler \
-    --output-csv finsler_sweep_results.csv \
+python scripts/generate_plot_mean_variance.py \
+    --log-root /home/stud/leez/reid/src/bau_finsler/logs/finsler_alphaRNG\
+    --output-csv finsler_sweepRNG_results.csv \
     --output-plot finsler_alpha_sweep.png   
+
 """
 
 from __future__ import annotations
