@@ -344,7 +344,7 @@ def main_worker(args):
             continue
         params += [{"params": [value], "lr": args.lr, "weight_decay": args.weight_decay}]
     if alpha_module is not None:
-        alpha_lr_mult = 100.0
+        alpha_lr_mult = 1.0
         params += [{"params": alpha_module.parameters(), "lr": args.lr * alpha_lr_mult, "weight_decay": 0.0}]
     optimizer = torch.optim.Adam(params)
     # optimizer = geoopt.optim.RiemannianAdam(
