@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=bau-ablation-finsler         # Job name
-#SBATCH --array=0-9                             # 10 runs: 0-9
+#SBATCH --array=0-10                             # 11 runs: 0-10
 #SBATCH --gres=gpu:1,VRAM:28G                   # Request two 24GB-class GPUs 
 #SBATCH --nodes=1                               # Run all processes on a single node
 #SBATCH --cpus-per-task=5                       # Number of CPU cores per task
@@ -42,6 +42,7 @@ LOSS_CONFIGS=(
   "--no-align --no-uniform --no-domain --prob 0.0"
   "--no-align --no-uniform --no-domain --no-ce"
   "--no-align --no-uniform --no-domain"
+  "--no-triplet --no-uniform --no-domain"
   "--no-uniform --no-domain"
   "--no-align --no-domain"
   "--no-align --no-uniform"
@@ -54,13 +55,14 @@ LOSS_NAMES=(
   "1_Abs_Baseline"
   "2_Pure_Triplet"
   "3_Std_Baseline"
-  "4_Base_Align"
-  "5_Base_Uniform"
-  "6_Base_Domain"
-  "7_Base_Align_Uni"
-  "8_Base_Align_Dom"
-  "9_Base_Uni_Dom"
-  "10_Full_Method"
+  "4_CE_Align"
+  "5_Base_Align"
+  "6_Base_Uniform"
+  "7_Base_Domain"
+  "8_Base_Align_Uni"
+  "9_Base_Align_Dom"
+  "10_Base_Uni_Dom"
+  "11_Full_Method"
 )
 
 # Determine indices for this task
