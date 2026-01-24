@@ -28,7 +28,7 @@ class AlphaParameter(nn.Module):
 		self.max_alpha = float(max_alpha)
 		self.temperature = float(temperature)
 
-		effective_init = init if init > 1e-3 else 1e-
+		effective_init = init if init > 1e-3 else 1e-3
 		self.raw_alpha = nn.Parameter(self._init_raw_alpha(effective_init))
 		# self.raw_alpha = nn.Parameter(self._init_raw_alpha(init))
 
