@@ -35,7 +35,17 @@ echo "Logs dir: ${LOGS_DIR}"
 
 mkdir -p "${LOGS_DIR}"
 
-srun --unbuffered python examples/train_bau.py \
+# --- Snapshot code to isolate job from git branch changes ---
+SNAP_DIR="${LOGS_DIR}/code_snapshot"
+mkdir -p "${SNAP_DIR}"
+cp -r bau examples "${SNAP_DIR}/"
+echo "Snapshotted code to: ${SNAP_DIR}"
+# -----------------------------------------------------------
+
+# Point PYTHONPATH to the snapshot instead of the repo root
+export PYTHONPATH="${SNAP_DIR}"
+
+srun --unbuffered python "${SNAP_DIR}/examples/train_bau.py" \
   -a "${ARCH}" \
   -ds market1501 msmt17 cuhksysu \
   -dt cuhk03 \
