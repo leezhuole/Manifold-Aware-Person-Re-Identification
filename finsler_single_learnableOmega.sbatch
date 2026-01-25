@@ -29,11 +29,6 @@ ITERS=500                       # Default
 WARMUP_STEP=10                  # Default
 EPOCHS=60                       # Default
 
-# Finsler alpha learnable configurations
-ALPHA_INIT=0.1                 # Learnable alpha initial value
-ALPHA_MAX=1.0                  # Learnable alpha max value
-ALPHA_TEMP=1.0                 # Learnable alpha temperature
-
 LOGS_DIR="$(pwd)/logs/learnableAlpha/job_${SLURM_JOB_ID}_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}_monotonicsigmoid"
 WANDB_NAME="learnableAlpha_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}_monosigmoid_cuhk03"
 echo "Starting finsler experimentation | Alpha Init ${ALPHA_INIT} | Alpha Max ${ALPHA_MAX} | Alpha Temp ${ALPHA_TEMP}"
@@ -53,9 +48,6 @@ srun --unbuffered python examples/train_bau.py \
   --logs-dir "${LOGS_DIR}" \
   --wandb-name "${WANDB_NAME}" \
   --verbosity 2 \
-  --alpha-init "${ALPHA_INIT}" \
-  --alpha-max "${ALPHA_MAX}" \
-  --alpha-temp "${ALPHA_TEMP}" \
   --eval-drift true \
   --memory-bank-mode full 
 

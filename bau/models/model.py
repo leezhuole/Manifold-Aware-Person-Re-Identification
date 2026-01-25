@@ -203,16 +203,17 @@ class resnet50_finsler(nn.Module):
         identity = self.bn_neck(emb)
         identity_norm = F.normalize(identity)
         drift = self.drift_head(emb)
-        combined = torch.cat([emb, drift], dim=1)
+        combined_emb = torch.cat([emb, drift], dim=1)
+        combined_f = torch.cat([identity_norm, drift], dim=1)
 
         if self.training:
             logits = None
             if self.num_classes > 0:
                 logits = self.classifier(identity)
             if logits is not None:
-                return combined, identity_norm, logits
+                return combined_emb, combined_f, logits
             raise ValueError("Number of classes must be greater than 0 to compute logits.")
-        return self.select_eval_embedding(combined)
+        return self.select_eval_embedding(combined_f)
 
 
 

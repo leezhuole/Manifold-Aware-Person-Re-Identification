@@ -30,7 +30,6 @@ class BAUTrainer(object):
         Note that static alpha is not used during training. It is only set as a default when no alpha_module is provided
         
         """
-        
         super(BAUTrainer, self).__init__()
         self.model = model
         self.memory_bank = memory_bank
@@ -92,16 +91,15 @@ class BAUTrainer(object):
                 f_w, f_s = f.chunk(2)
                 logits_w, logits_s = logits.chunk(2)
 
-                bank_dim = self.memory_bank.features.size(1)
-                if bank_dim == f_w.size(1):
-                    bank_w, bank_s = f_w, f_s
-                elif bank_dim == emb_w.size(1):
-                    bank_w, bank_s = emb_w, emb_s
-                else:
-                    raise RuntimeError(
-                        f"MemoryBank feature dim ({bank_dim}) does not match "
-                        f"f ({f_w.size(1)}) or emb ({emb_w.size(1)})"
-                    )
+                drift_norm_mean = None
+                drift_norm_max = None
+                module = getattr(self.model, 'module', self.model)
+                drift_start = getattr(module, 'identity_dim', None)
+                if drift_start is not None and f.size(1) > drift_start:
+                    drift = f[:, drift_start:]
+                    drft_norm = drift.norm(p=2, dim=1)
+                    drift_norm_mean = drft_norm.mean()
+                    drift_norm_max = drft_norm.max()
 
                 # compute weights
                 with torch.no_grad():
@@ -135,27 +133,17 @@ class BAUTrainer(object):
 
                 loss_tri = self.criterion_tri(emb_w, pids, alpha=alpha_value) if self.use_triplet else torch.tensor(0.0).cuda()
                 
-                if self.dist_func is finsler_drift_dist:
-                    if bank_dim == f_w.size(1) and self.use_domain:
-                        raise RuntimeError(
-                            "Finsler domain loss requires combined embeddings in memory; "
-                            "set memory_bank_mode='full' or disable domain loss."
-                        )
-                    align_w, align_s = emb_w, emb_s
-                else:
-                    align_w, align_s = f_w, f_s
-
-                loss_align = self.align_loss(align_w, align_s, pids, weight, alpha_value) if self.use_align else torch.tensor(0.0).cuda()
+                loss_align = self.align_loss(f_w, f_s, pids, weight, alpha_value) if self.use_align else torch.tensor(0.0).cuda()
                 
-                loss_uniform = 0.5*(self.uniform_loss(align_w, alpha_value) + self.uniform_loss(align_s, alpha_value)) if self.use_uniform else torch.tensor(0.0).cuda()
+                loss_uniform = 0.5*(self.uniform_loss(f_w, alpha_value) + self.uniform_loss(f_s, alpha_value)) if self.use_uniform else torch.tensor(0.0).cuda()
                 
-                loss_domain = 0.5*(self.domain_loss(bank_w, self.memory_bank.features, dids, alpha_value) +
-                                   self.domain_loss(bank_s, self.memory_bank.features, dids, alpha_value)) if self.use_domain else torch.tensor(0.0).cuda()
+                loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids, alpha_value) +
+                                   self.domain_loss(f_s, self.memory_bank.features, dids, alpha_value)) if self.use_domain else torch.tensor(0.0).cuda()
 
                 with torch.no_grad():
-                    self.memory_bank.momentum_update(bank_w, pids)
-
-            loss = loss_ce + loss_tri + self.lam * loss_align + loss_uniform + loss_domain
+                    self.memory_bank.momentum_update(f_w, pids)
+                    
+                loss = loss_ce + loss_tri + self.lam * loss_align + loss_uniform + loss_domain
 
             if torch.isnan(loss):  # early exit if instability appears
                 msg = f"NaN loss detected at epoch {epoch}, iter {i}"
@@ -200,6 +188,8 @@ class BAUTrainer(object):
                         'scaler/scale': float(self.scaler.get_scale()),
                         'epoch': epoch,
                         'iter': i + 1,
+                        'omega_norm_mean': drift_norm_mean.item() if drift_norm_mean is not None else None,
+                        'omega_norm_max': drift_norm_max.item() if drift_norm_max is not None else None,
                     }, step=global_step)
                 except Exception:
                     pass  # never let logging break training
