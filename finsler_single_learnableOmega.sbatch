@@ -11,7 +11,6 @@
 #SBATCH --error=logs/fins_learnableAlpha/finsler-%j.err           # Error log
 
 set -euo pipefail
-mkdir -p logs/learnableAlpha
 
 # Activate the environment
 source ~/miniconda3/etc/profile.d/conda.sh
@@ -29,9 +28,9 @@ ITERS=500                       # Default
 WARMUP_STEP=10                  # Default
 EPOCHS=60                       # Default
 
-LOGS_DIR="$(pwd)/logs/learnableAlpha/job_${SLURM_JOB_ID}_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}_monotonicsigmoid"
-WANDB_NAME="learnableAlpha_alphainit${ALPHA_INIT}_alphamax${ALPHA_MAX}_alphatemp${ALPHA_TEMP}_monosigmoid_cuhk03"
-echo "Starting finsler experimentation | Alpha Init ${ALPHA_INIT} | Alpha Max ${ALPHA_MAX} | Alpha Temp ${ALPHA_TEMP}"
+LOGS_DIR="$(pwd)/logs/learnableOmega/job_${SLURM_JOB_ID}"
+WANDB_NAME="learnableOmega_cuhk03"
+echo "Starting finsler experimentation | Learnable omega"
 echo "Logs dir: ${LOGS_DIR}"
 
 mkdir -p "${LOGS_DIR}"
