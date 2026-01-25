@@ -94,6 +94,40 @@ def euclidean_dist(x: torch.Tensor, y: torch.Tensor, alpha=None) -> torch.Tensor
 	return dist
 
 
+def finsler_drift_dist(x: torch.Tensor, y: torch.Tensor, alpha=None) -> torch.Tensor:
+	"""
+	Compute Randers/Finsler distance using concatenated [identity | drift] embeddings.
+	"""
+	# Sanity Checks -- only supports ResNet50-based 4096-dim embeddings
+	if x.size(1) != y.size(1):
+		raise ValueError("finsler_drift_dist requires x and y to have the same feature dimension")
+	if x.size(1) == 2048:
+		raise ValueError(
+			"finsler_drift_dist expects concatenated [identity|drift] embeddings; "
+			"got 2048-d identity-only features. Use full embeddings (e.g., 4096-d)."
+		)
+	if x.size(1) % 2 != 0:
+		raise ValueError("finsler_drift_dist requires an even feature dimension")
+	
+
+	m, n = x.size(0), y.size(0)
+	feat_dim = x.size(1) // 2
+	identity_x = x[:, :feat_dim]
+	drift_x = x[:, feat_dim:]
+	identity_y = y[:, :feat_dim]
+
+	xx = torch.pow(identity_x, 2).sum(1, keepdim=True).expand(m, n)
+	yy = torch.pow(identity_y, 2).sum(1, keepdim=True).expand(n, m).t()
+	dist = xx + yy
+	dist = dist - 2 * identity_x @ identity_y.t()
+	dist = dist.clamp(min=1e-12).sqrt()
+
+	term_a = torch.mm(drift_x, identity_y.t())
+	term_b = (drift_x * identity_x).sum(dim=1, keepdim=True).expand(m, n)
+	asymmetry = term_a - term_b
+	return dist + asymmetry
+
+
 def cosine_dist(x, y):
 	bs1, bs2 = x.size(0), y.size(0)
 	frac_up = torch.matmul(x, y.transpose(0, 1))
@@ -133,7 +167,7 @@ class TripletLoss(nn.Module):
 	Details can be seen in 'In defense of the Triplet Loss for Person Re-Identification'
 	'''
 
-	def __init__(self, margin=None, normalize_feature=False, manifold=None, alpha=None):
+	def __init__(self, margin=None, normalize_feature=False, manifold=None, alpha=None, dist_func=euclidean_dist):
 		"""
 		Docstring for __init__
 		
@@ -147,6 +181,7 @@ class TripletLoss(nn.Module):
 		self.normalize_feature = normalize_feature
 		self.manifold = manifold
 		self.alpha = alpha
+		self.dist_func = dist_func
 		if margin is not None:
 			self.margin_loss = nn.MarginRankingLoss(margin=float(margin)).cuda()
 		else:
@@ -170,7 +205,7 @@ class TripletLoss(nn.Module):
 			if self.normalize_feature:
 				# equal to cosine similarity
 				emb = F.normalize(emb)
-			mat_dist = euclidean_dist(x=emb, y=emb, alpha=alpha_value)
+			mat_dist = self.dist_func(x=emb, y=emb, alpha=alpha_value)
 		
 		# Case 2: Non-euclidean manifold		
 		else:

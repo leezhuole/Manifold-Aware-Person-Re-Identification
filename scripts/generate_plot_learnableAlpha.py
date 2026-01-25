@@ -18,10 +18,10 @@ It supports two common layouts:
 	- Run dir contains: ``...alpha0.1...``
 	- X-axis uses alpha from the folder name
 
-python scripts/generate_plot_mean_variance_alpha.py \
-	--log-root logs/learnableAlpha \
-	--output-csv learnable_alpha_results.csv \
-	--output-plot learnable_alpha.png
+python scripts/generate_plot_learnableAlpha.py \
+	--log-root logs/learnableAlpha_2501 \
+	--output-csv results/learnableAlpha_alphainitSweep_2501/learnable_alpha_results.csv \
+	--output-plot results/learnableAlpha_alphainitSweep_2501/learnable_alpha.png
 """
 
 from __future__ import annotations
@@ -115,6 +115,12 @@ def parse_args() -> argparse.Namespace:
 		default=3,
 		help="Decimal places for floating values in the saved CSV (default: 3)",
 	)
+	parser.add_argument(
+		"--pretrained-tag",
+		type=str,
+		default="PRETRAINEDtrue",
+		help="Substring in run folder name that marks a pretrained run (default: PRETRAINEDtrue)",
+	)
 	return parser.parse_args()
 
 
@@ -134,8 +140,14 @@ def parse_alphas_from_file(log_file: Path) -> Tuple[Optional[float], Optional[fl
 	alpha_init: Optional[float] = None
 	alpha_end: Optional[float] = None
 
-	p_init = re.compile(r"alpha_init=([0-9]+\.?[0-9]*)")
-	p_end = re.compile(r"Logged alpha value:\s*([0-9]+\.?[0-9]*)")
+	p_init = re.compile(r"alpha_init=([0-9.+-eE]+)")
+	p_end_patterns = [
+		re.compile(r"Logged alpha value[s]*:\s*(?:tensor\()?([0-9.+-eE]+)", re.IGNORECASE),
+		re.compile(r"Logged alpha value[s]*:.*?alpha=([0-9.+-eE]+)", re.IGNORECASE),
+		re.compile(r"\balpha=([0-9.+-eE]+)\b", re.IGNORECASE),
+		re.compile(r"alpha_end[:=]\s*(?:tensor\()?([0-9.+-eE]+)", re.IGNORECASE),
+		re.compile(r"final alpha[:=]\s*(?:tensor\()?([0-9.+-eE]+)", re.IGNORECASE),
+	]
 
 	try:
 		with log_file.open("r", encoding="utf-8", errors="ignore") as fh:
@@ -144,11 +156,12 @@ def parse_alphas_from_file(log_file: Path) -> Tuple[Optional[float], Optional[fl
 				if m_init and alpha_init is None:
 					alpha_init = _parse_float(m_init.group(1))
 
-				m_end = p_end.search(line)
-				if m_end:
-					parsed = _parse_float(m_end.group(1))
-					if parsed is not None:
-						alpha_end = parsed
+				for pat in p_end_patterns:
+					m_end = pat.search(line)
+					if m_end:
+						parsed = _parse_float(m_end.group(1))
+						if parsed is not None:
+							alpha_end = parsed
 	except Exception as exc:  # pragma: no cover
 		print(f"[WARN] Could not read {log_file}: {exc}")
 		return None, None
@@ -246,7 +259,7 @@ def _iter_log_files(run_dir: Path) -> Iterable[Path]:
 	return candidates
 
 
-def scan_logs(root_dir: Path) -> pd.DataFrame:
+def scan_logs(root_dir: Path, pretrained_tag: str = "PRETRAINEDtrue") -> pd.DataFrame:
 	"""Walk run directories, extract metrics, return DataFrame of runs."""
 
 	if not root_dir.exists():
@@ -261,6 +274,8 @@ def scan_logs(root_dir: Path) -> pd.DataFrame:
 	for child in root_dir.iterdir():
 		if not child.is_dir():
 			continue
+
+		is_pretrained = pretrained_tag in child.name
 
 		# Handle baseline runs (no alpha)
 		if "alphaNone" in child.name or "alphainitNone" in child.name:
@@ -283,6 +298,7 @@ def scan_logs(root_dir: Path) -> pd.DataFrame:
 					"AlphaEnd": None,
 					"mAP": map_val,
 					"Rank-1": rank1_val,
+					"Pretrained": is_pretrained,
 					"LogDir": child.name,
 					"LogFile": log_file.name,
 				}
@@ -343,6 +359,7 @@ def scan_logs(root_dir: Path) -> pd.DataFrame:
 				"AlphaEnd": alpha_end,
 				"mAP": map_val,
 				"Rank-1": rank1_val,
+				"Pretrained": is_pretrained,
 				"LogDir": child.name,
 				"LogFile": log_file.name,
 			}
@@ -372,6 +389,8 @@ def _coerce_schema(df: pd.DataFrame) -> pd.DataFrame:
 		)
 	if "AlphaEnd" not in df.columns:
 		df["AlphaEnd"] = np.nan
+	if "Pretrained" not in df.columns:
+		df["Pretrained"] = False
 	return df
 
 
@@ -383,6 +402,10 @@ def compute_alpha_stats(df: pd.DataFrame) -> pd.DataFrame:
 
 	# Exclude baseline rows (alphaNone) from the alpha_init aggregation
 	df_alpha = df[df["AlphaInit"].notna()].copy()
+	if "Pretrained" in df_alpha.columns:
+		df_alpha = df_alpha[df_alpha["Pretrained"] != True].copy()
+		if df_alpha.empty:
+			df_alpha = df[df["AlphaInit"].notna()].copy()
 	if df_alpha.empty:
 		return pd.DataFrame()
 
@@ -475,12 +498,15 @@ def plot_metric(
 	all_end = df_runs["AlphaEnd"].to_numpy(dtype=float)
 	use_color = alpha_end_display == "colorbar" and np.isfinite(all_end).any()
 	sc = None
+	added_norm_legend = False
+	added_pre_legend = False
 
 	for alpha_init, alpha_label in zip(x_vals, labels):
 		group = df_runs[df_runs["AlphaInitLabel"] == alpha_label]
 		if group.empty:
 			continue
 
+		group = group.reset_index(drop=True)
 		y_vals = group[metric_name].to_numpy(dtype=float)
 		m = len(y_vals)
 		offsets = np.zeros(m, dtype=float)
@@ -488,43 +514,65 @@ def plot_metric(
 			offsets = np.linspace(-jitter, jitter, m)
 
 		x_plot = alpha_init + offsets
+		group = group.assign(_xplot=x_plot)
 
-		if use_color:
-			c_vals = group["AlphaEnd"].to_numpy(dtype=float)
-			if np.isfinite(c_vals).any():
-				sc = ax.scatter(
-					x_plot,
-					y_vals,
-					c=c_vals,
-					cmap="viridis",
-					alpha=0.85,
-					s=55,
-					edgecolor="white",
-					linewidth=0.6,
-					zorder=3,
-				)
+		def _scatter_subset(subset: pd.DataFrame, marker: str, label: Optional[str]) -> None:
+			nonlocal sc
+			if subset.empty:
+				return
+			if use_color:
+				c_vals = subset["AlphaEnd"].to_numpy(dtype=float)
+				if np.isfinite(c_vals).any():
+					sc = ax.scatter(
+						subset["_xplot"],
+						subset[metric_name].to_numpy(dtype=float),
+						c=c_vals,
+						cmap="viridis",
+						alpha=0.85,
+						s=55,
+						edgecolor="white",
+						linewidth=0.6,
+						zorder=3,
+						marker=marker,
+						label=label,
+					)
+				else:
+					ax.scatter(
+						subset["_xplot"],
+						subset[metric_name].to_numpy(dtype=float),
+						color=color,
+						alpha=0.8,
+						s=55,
+						edgecolor="white",
+						linewidth=0.6,
+						zorder=3,
+						marker=marker,
+						label=label,
+					)
 			else:
 				ax.scatter(
-					x_plot,
-					y_vals,
+					subset["_xplot"],
+					subset[metric_name].to_numpy(dtype=float),
 					color=color,
 					alpha=0.8,
 					s=55,
 					edgecolor="white",
 					linewidth=0.6,
 					zorder=3,
+					marker=marker,
+					label=label,
 				)
-		else:
-			ax.scatter(
-				x_plot,
-				y_vals,
-				color=color,
-				alpha=0.8,
-				s=55,
-				edgecolor="white",
-				linewidth=0.6,
-				zorder=3,
-			)
+
+		sub_pre = group[group["Pretrained"] == True]
+		sub_norm = group[group["Pretrained"] != True]
+
+		_scatter_subset(sub_norm, marker="o", label="Run" if not added_norm_legend else None)
+		if not added_norm_legend and not sub_norm.empty:
+			added_norm_legend = True
+
+		_scatter_subset(sub_pre, marker="s", label="Pretrained" if not added_pre_legend else None)
+		if not added_pre_legend and not sub_pre.empty:
+			added_pre_legend = True
 
 		if alpha_end_display == "annotate":
 			for x_i, y_i, end_i in zip(x_plot, y_vals, group["AlphaEnd"].to_numpy(dtype=float)):
@@ -546,11 +594,9 @@ def plot_metric(
 	ax.plot(
 		x_vals,
 		means,
-		marker="o",
 		linestyle="-.",
 		color=color,
 		linewidth=2.2,
-		markersize=7,
 		zorder=4,
 	)
 
@@ -602,13 +648,16 @@ def plot_metric(
 		cbar = plt.colorbar(sc, ax=ax, pad=0.02)
 		cbar.set_label(r"Final $\alpha$", fontweight="bold")
 
+	if added_norm_legend or added_pre_legend:
+		ax.legend(loc="lower right", frameon=True, fontsize=9)
+
 	# Highlight optimal (mean)
 	best_idx = means.argmax()
 	best_alpha = labels[best_idx]
 	best_score = means[best_idx]
 	best_pos = x_vals[best_idx]
 
-	ax.axvline(best_pos, color="gray", linestyle=":", linewidth=1.5, alpha=0.7)
+	# ax.axvline(best_pos, color="gray", linestyle=":", linewidth=1.5, alpha=0.7)
 	ax.scatter([best_pos], [best_score], color=color, zorder=5, s=100, edgecolor='white')
 
 	ax.annotate(
@@ -683,11 +732,24 @@ def plot_results(
 def main() -> None:
 	args = parse_args()
 
-	df = scan_logs(args.log_root)
+	df = scan_logs(args.log_root, pretrained_tag=args.pretrained_tag)
 	df = _coerce_schema(df)
 	if df.empty:
 		print("[ERROR] No valid metrics found; nothing to plot.")
 		sys.exit(1)
+
+	alpha_zero = df[df["AlphaInit"].fillna(-1) == 0.0]
+	if not alpha_zero.empty:
+		print("[DEBUG] AlphaInit==0.0 runs:")
+		for _, row in alpha_zero.iterrows():
+			print(
+				"  - "
+				f"LogDir={row.get('LogDir')} | "
+				f"AlphaInit={row.get('AlphaInit')} | "
+				f"AlphaEnd={row.get('AlphaEnd')} | "
+				f"Pretrained={row.get('Pretrained')} | "
+				f"LogFile={row.get('LogFile')}"
+			)
 
 	# Compute per-alpha stats for plotting and tabular display
 	baseline_means = compute_baseline_means(df)
