@@ -13,17 +13,19 @@ CUDA_VISIBLE_DEVICES=0 python examples/train_bau.py -a resnet50 -ds market1501 m
 
 
 CUDA_VISIBLE_DEVICES=0 python examples/train_bau.py \
-  -a resnet50 \
+  -a resnet50_finsler \
   -ds market1501 msmt17 cuhksysu \
   -dt cuhk03 \
   -b  64 \
   --lam 1.5 --k 10 --iters 500 \
-  --logs-dir "/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/logs/learnableAlpha" \
+  --logs-dir "/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/logs/learnableOmega" \
   --eval-epochs 1 5 10 15 19 \
   --verbosity 2 \
-  --wandb-name "learnableAlphaTest" \
+  --wandb-name "learnableOmegaTest" \
   --epochs 20 \
   --alpha-init 0.0 \
   --alpha-max 1.0 \
-  --alpha-temp 1.0
+  --alpha-temp 1.0 \
+  --eval-drift true \
+  --memory-bank-mode full 
 

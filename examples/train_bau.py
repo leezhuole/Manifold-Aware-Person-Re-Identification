@@ -140,7 +140,16 @@ def get_test_loader(dataset, height, width, batch_size, workers, testset=None):
 
 
 def create_model(args, num_classes, manifold):
-    model = models.create(args.arch, num_classes=num_classes, manifold=manifold)
+    if args.arch == "resnet50_finsler":
+        model = models.create(
+            args.arch,
+            num_classes=num_classes,
+            manifold=manifold,
+            use_drift_in_eval=args.eval_drift,
+            memory_bank_mode=args.memory_bank_mode,
+        )
+    else:
+        model = models.create(args.arch, num_classes=num_classes, manifold=manifold)
     model.cuda()
     model = torch.nn.DataParallel(model)
     return model
@@ -207,9 +216,31 @@ def main_worker(args):
     else:
         manifold = None
         log("Using Euclidean model", level=1)
+
+    if args.arch == "resnet50_finsler" and manifold is not None:
+        log("Selected resnet50_finsler; forcing Euclidean manifold for Finsler distance.", level=1)
+        manifold = None
     num_classes = train_dataset.num_train_pids
     model = create_model(args, num_classes=num_classes, manifold=manifold)
     log("Created model and moved to device", level=2)
+
+    module = getattr(model, 'module', model)
+    dist_func = getattr(module, 'dist_func', None)
+    embedding_dim = getattr(module, 'embedding_dim', None)
+    memory_bank_dim = getattr(module, 'memory_bank_dim', None)
+    supports_manifold = getattr(module, 'supports_manifold', True)
+
+    if manifold is not None and not supports_manifold:
+        raise ValueError("Selected model does not support manifold-aware mode.")
+
+    if dist_func is None:
+        log("Model has no dist_func attribute; defaulting to euclidean_dist in trainer/evaluator.", level=1)
+    else:
+        log(f"Using model dist_func: {getattr(dist_func, '__name__', str(dist_func))}", level=2)
+    if embedding_dim is not None:
+        log(f"Model embedding_dim: {embedding_dim}", level=2)
+    if memory_bank_dim is not None:
+        log(f"Model memory_bank_dim: {memory_bank_dim}", level=2)
 
     alpha_init = args.alpha_init if args.alpha_init is not None else args.alpha    
     alpha_module = None
@@ -292,7 +323,15 @@ def main_worker(args):
             pass
 
     # memory bank with init
-    memory_bank = MemoryBank(2048, num_classes, manifold=manifold).cuda()
+    memory_bank_features = memory_bank_dim if memory_bank_dim is not None else 2048
+
+    # Configure split normalization for Finsler Full mode
+    split_norm = None
+    if args.arch == "resnet50_finsler" and args.memory_bank_mode == "full":
+        split_norm = memory_bank_features // 2
+        log(f"Configuring MemoryBank with split_norm={split_norm} for Finsler embeddings", level=1)
+
+    memory_bank = MemoryBank(memory_bank_features, num_classes, manifold=manifold, split_norm=split_norm).cuda()
     bank_features = cast(torch.Tensor, memory_bank.features)
     bank_labels = cast(torch.Tensor, memory_bank.labels)
     device = bank_features.device
@@ -308,7 +347,14 @@ def main_worker(args):
     for pid in sorted(features_dict.keys()):
         reps = torch.cat(features_dict[pid], 0).to(device)
         if manifold is None:
-            centroid = F.normalize(reps.mean(0), dim=0)
+            centroid = reps.mean(0)
+            if split_norm:
+                head = centroid[:split_norm]
+                tail = centroid[split_norm:]
+                head = F.normalize(head, dim=0)
+                centroid = torch.cat([head, tail])
+            else:
+                centroid = F.normalize(centroid, dim=0)
         else:
             reps = manifold.projx(reps, dim=-1)
             tangent = manifold.logmap0(reps, dim=-1)
@@ -554,6 +600,10 @@ if __name__ == '__main__':
     parser.add_argument('--alpha-init', type=parse_optional_float, default=None, help='initial alpha value for Finsler manifold (learnable if set)')
     parser.add_argument('--alpha-max', type=float, default=1.0, help='max alpha for scaled sigmoid')
     parser.add_argument('--alpha-temp', type=float, default=1.0, help='temperature for scaled sigmoid')
+    parser.add_argument('--eval-drift', type=lambda x: x.lower() == 'true', default=True,
+                        help='use drift branch in evaluation ranking (resnet50_finsler only)')
+    parser.add_argument('--memory-bank-mode', type=str, default='full', choices=['full', 'identity'],
+                        help='memory bank embedding mode for resnet50_finsler')
     
     # fine-tuning
     parser.add_argument('--fine-tuning', type=lambda x: x.lower() == 'true', default=False, help='fine-tune the model')

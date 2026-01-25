@@ -7,6 +7,8 @@ import torchvision
 import torch
 import geoopt
 
+from ..loss.triplet import euclidean_dist, finsler_drift_dist
+
 from .pooling import GeneralizedMeanPoolingP
 from .vit import vit_base_patch16_224_TransReID
 from .mobilenetv2 import mobilenetv2_x1_4
@@ -45,6 +47,10 @@ class resnet50(nn.Module):
         super(resnet50, self).__init__()
         self.num_classes = num_classes
         self.manifold = manifold
+        self.dist_func = euclidean_dist
+        self.embedding_dim = 2048
+        self.memory_bank_dim = 2048
+        self.supports_manifold = True
         
         # resnet50 backbone
         resnet = torchvision.models.resnet50(pretrained=pretrained)
@@ -114,6 +120,101 @@ class resnet50(nn.Module):
             return f_hyp
 
 
+class FinslerDriftHead(nn.Module):
+    def __init__(self, input_dim, output_dim, max_norm=0.95):
+        super(FinslerDriftHead, self).__init__()
+        hidden_dim = max(1, input_dim // 2)
+        self.max_norm = max_norm
+        self.block = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x):
+        drift = self.block(x)
+        # drift = torch.tanh(drift)
+        norms = torch.norm(drift, p=2, dim=1, keepdim=True)
+        scaled = torch.clamp(norms, max=self.max_norm)
+        drift = drift * (scaled / (norms + 1e-6))
+        return drift
+
+
+class resnet50_finsler(nn.Module):
+    """
+    ResNet50 with a learned drift vector branch for Finsler/Randers distance.
+    """
+    def __init__(self, num_classes=0, pretrained=True, manifold=None, use_drift_in_eval=True, memory_bank_mode="full"):
+        super(resnet50_finsler, self).__init__()
+        self.num_classes = num_classes
+        self.manifold = manifold
+        self.dist_func = finsler_drift_dist
+        self.identity_dim = 2048
+        self.drift_dim = 2048
+        self.embedding_dim = self.identity_dim + self.drift_dim
+        self.use_drift_in_eval = bool(use_drift_in_eval)
+        self.supports_manifold = False
+
+        if memory_bank_mode not in {"full", "identity"}:
+            raise ValueError("memory_bank_mode must be 'full' or 'identity'")
+        self.memory_bank_dim = self.embedding_dim if memory_bank_mode == "full" else self.identity_dim
+
+        resnet = torchvision.models.resnet50(pretrained=pretrained)
+
+        resnet.layer4[0].conv2.stride = (1, 1)
+        resnet.layer4[0].downsample[0].stride = (1, 1)
+
+        self.base = nn.Sequential(
+            resnet.conv1,
+            resnet.bn1,
+            resnet.relu,
+            resnet.maxpool,
+            resnet.layer1,
+            nn.InstanceNorm2d(256),
+            resnet.layer2,
+            nn.InstanceNorm2d(512),
+            resnet.layer3,
+            nn.InstanceNorm2d(1024),
+            resnet.layer4,
+        )
+
+        self.pool = GeneralizedMeanPoolingP(output_size=(1, 1))
+
+        self.bn_neck = nn.BatchNorm1d(self.identity_dim)
+        init.constant_(self.bn_neck.weight, 1)
+        init.constant_(self.bn_neck.bias, 0)
+        self.bn_neck.bias.requires_grad_(False)
+
+        self.drift_head = FinslerDriftHead(self.identity_dim, self.drift_dim)
+
+        if self.num_classes > 0:
+            self.classifier = nn.Linear(self.identity_dim, self.num_classes, bias=False)
+
+    def select_eval_embedding(self, embedding):
+        if self.use_drift_in_eval:
+            return embedding
+        return embedding[:, :self.identity_dim]
+
+    def forward(self, x):
+        x = self.base(x)
+        emb = self.pool(x)
+        emb = emb.view(x.size(0), -1)
+        identity = self.bn_neck(emb)
+        identity_norm = F.normalize(identity)
+        drift = self.drift_head(emb)
+        combined = torch.cat([emb, drift], dim=1)
+
+        if self.training:
+            logits = None
+            if self.num_classes > 0:
+                logits = self.classifier(identity)
+            if logits is not None:
+                return combined, identity_norm, logits
+            raise ValueError("Number of classes must be greater than 0 to compute logits.")
+        return self.select_eval_embedding(combined)
+
+
 
 class mobilenetv2(nn.Module):
     """
@@ -125,6 +226,10 @@ class mobilenetv2(nn.Module):
         super(mobilenetv2, self).__init__()
         self.num_classes = num_classes
         self.manifold = manifold
+        self.dist_func = euclidean_dist
+        self.embedding_dim = 1792
+        self.memory_bank_dim = 1792
+        self.supports_manifold = True
         
         # mobilenetv2 backbone
         mobilenet = mobilenetv2_x1_4(num_classes=num_classes)
@@ -180,6 +285,10 @@ class vit_base_patch16(nn.Module):
         self.in_planes = 768
         self.num_classes = num_classes
         self.manifold = manifold        
+        self.dist_func = euclidean_dist
+        self.embedding_dim = 768
+        self.memory_bank_dim = 768
+        self.supports_manifold = True
 
         # vit backbone
         self.base = vit_base_patch16_224_TransReID(camera=0, view=0, local_feature=False)

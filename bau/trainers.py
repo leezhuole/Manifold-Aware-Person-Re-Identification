@@ -12,7 +12,7 @@ from .loss import CrossEntropyLabelSmooth, TripletLoss
 from .utils.meters import AverageMeter
 from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
-from .loss.triplet import euclidean_dist
+from .loss.triplet import euclidean_dist, finsler_drift_dist
 
 # optional wandb logging (kept minimal and non-intrusive)
 try:
@@ -34,10 +34,12 @@ class BAUTrainer(object):
         super(BAUTrainer, self).__init__()
         self.model = model
         self.memory_bank = memory_bank
+        module = getattr(model, 'module', model)
+        self.dist_func = getattr(module, 'dist_func', euclidean_dist)
         
         self.criterion_ce = CrossEntropyLabelSmooth(num_classes=num_classes).cuda()
         static_alpha = None if alpha_module is not None else alpha
-        self.criterion_tri = TripletLoss(margin=margin, manifold=manifold, alpha=static_alpha).cuda()
+        self.criterion_tri = TripletLoss(margin=margin, manifold=manifold, alpha=static_alpha, dist_func=self.dist_func).cuda()
         self.scaler = GradScaler()
 
         self.lam = lam
@@ -86,9 +88,20 @@ class BAUTrainer(object):
                 inputs = torch.cat([inputs_w, inputs_s], dim=0)
                 emb, f, logits = self.model(inputs)
                 # f = F.normalize(f)        # already normalized in model
-                emb_w, _ = emb.chunk(2)
+                emb_w, emb_s = emb.chunk(2)
                 f_w, f_s = f.chunk(2)
                 logits_w, logits_s = logits.chunk(2)
+
+                bank_dim = self.memory_bank.features.size(1)
+                if bank_dim == f_w.size(1):
+                    bank_w, bank_s = f_w, f_s
+                elif bank_dim == emb_w.size(1):
+                    bank_w, bank_s = emb_w, emb_s
+                else:
+                    raise RuntimeError(
+                        f"MemoryBank feature dim ({bank_dim}) does not match "
+                        f"f ({f_w.size(1)}) or emb ({emb_w.size(1)})"
+                    )
 
                 # compute weights
                 with torch.no_grad():
@@ -122,15 +135,25 @@ class BAUTrainer(object):
 
                 loss_tri = self.criterion_tri(emb_w, pids, alpha=alpha_value) if self.use_triplet else torch.tensor(0.0).cuda()
                 
-                loss_align = self.align_loss(f_w, f_s, pids, weight, alpha_value) if self.use_align else torch.tensor(0.0).cuda()
+                if self.dist_func is finsler_drift_dist:
+                    if bank_dim == f_w.size(1) and self.use_domain:
+                        raise RuntimeError(
+                            "Finsler domain loss requires combined embeddings in memory; "
+                            "set memory_bank_mode='full' or disable domain loss."
+                        )
+                    align_w, align_s = emb_w, emb_s
+                else:
+                    align_w, align_s = f_w, f_s
+
+                loss_align = self.align_loss(align_w, align_s, pids, weight, alpha_value) if self.use_align else torch.tensor(0.0).cuda()
                 
-                loss_uniform = 0.5*(self.uniform_loss(f_w, alpha_value) + self.uniform_loss(f_s, alpha_value)) if self.use_uniform else torch.tensor(0.0).cuda()
+                loss_uniform = 0.5*(self.uniform_loss(align_w, alpha_value) + self.uniform_loss(align_s, alpha_value)) if self.use_uniform else torch.tensor(0.0).cuda()
                 
-                loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids, alpha_value) +
-                                   self.domain_loss(f_s, self.memory_bank.features, dids, alpha_value)) if self.use_domain else torch.tensor(0.0).cuda()
+                loss_domain = 0.5*(self.domain_loss(bank_w, self.memory_bank.features, dids, alpha_value) +
+                                   self.domain_loss(bank_s, self.memory_bank.features, dids, alpha_value)) if self.use_domain else torch.tensor(0.0).cuda()
 
                 with torch.no_grad():
-                    self.memory_bank.momentum_update(f_w, pids)
+                    self.memory_bank.momentum_update(bank_w, pids)
 
             loss = loss_ce + loss_tri + self.lam * loss_align + loss_uniform + loss_domain
 
@@ -198,13 +221,13 @@ class BAUTrainer(object):
     
     def align_loss(self, f_w, f_s, y, w, alpha=None):
 
-        # Case 1: Euclidean manifold
-        # if self.manifold is None and alpha is None:
-        #     dist_squared = euclidean_dist(f_s, f_w).pow(2)
+        effective_dist_func = self.dist_func
+        if effective_dist_func is finsler_drift_dist and f_w.size(1) == 2048:
+            effective_dist_func = euclidean_dist
 
         # Case 2: Finsler spaces and Euclidean Manifold
         if self.manifold is None:
-            dist_squared = euclidean_dist(f_s, f_w, alpha).pow(2)
+            dist_squared = effective_dist_func(f_s, f_w, alpha).pow(2)
 
         # Case 3: Non-euclidean manifold
         elif self.manifold is not None:
@@ -224,13 +247,14 @@ class BAUTrainer(object):
         return align_loss
 
     def uniform_loss(self, f, alpha=None):
-        # Case 1: Euclidean manifold
-        # if self.manifold is None and alpha is None:
-        #     u_loss = torch.pdist(f, p=2).pow(2).mul(-2).exp().mean().log()
         
+        effective_dist_func = self.dist_func
+        if effective_dist_func is finsler_drift_dist and f.size(1) == 2048:
+            effective_dist_func = euclidean_dist
+
         # Case 2: Finsler spaces and Euclidean Manifold
         if self.manifold is None:
-            pairwise = euclidean_dist(f, f, alpha)  # (B, B)
+            pairwise = effective_dist_func(f, f, alpha)  # (B, B)
             idx = torch.triu_indices(
                 pairwise.size(0), 
                 pairwise.size(1), 
@@ -262,13 +286,14 @@ class BAUTrainer(object):
 
     def domain_loss(self, f, c, dids, alpha=None):
         m, n = f.size(0), c.size(0)
-        # Case 1: Euclidean manifold
-        # if self.manifold is None and alpha is None:
-        #     dist_squared = euclidean_dist(f, c).pow(2)
         
+        effective_dist_func = self.dist_func
+        if effective_dist_func is finsler_drift_dist and f.size(1) == 2048:
+            effective_dist_func = euclidean_dist
+
         # Case 2: Finsler spaces and Euclidean Manifold
         if self.manifold is None:
-            dist_squared = euclidean_dist(f, c, alpha).pow(2)
+            dist_squared = effective_dist_func(f, c, alpha).pow(2)
 
         # Case 3: Non-euclidean manifold
         elif self.manifold is not None:

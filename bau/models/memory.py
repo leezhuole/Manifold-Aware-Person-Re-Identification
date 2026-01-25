@@ -18,7 +18,7 @@ class MemoryBank(nn.Module):
     a linear Euclidean space.
     
     """
-    def __init__(self, num_features, num_samples, momentum=0.1, manifold=None, eps=1e-12):
+    def __init__(self, num_features, num_samples, momentum=0.1, manifold=None, eps=1e-12, split_norm=None):
         """
         Docstring for __init__
         
@@ -27,6 +27,7 @@ class MemoryBank(nn.Module):
         :param momentum: Momentum factor for updating features
         :param manifold: Manifold object for manifold-aware updates (optional)
         :param eps: Small epsilon value to avoid division by zero
+        :param split_norm: If int > 0, normalizes features[:split_norm] and leaves features[split_norm:] raw.
         """
         super(MemoryBank, self).__init__()
         self.num_features = num_features
@@ -34,6 +35,7 @@ class MemoryBank(nn.Module):
         self.momentum = momentum
         self.manifold = manifold
         self.eps = eps
+        self.split_norm = split_norm
 
         self.register_buffer('features', torch.zeros(num_samples, num_features, dtype=torch.float))
         self.register_buffer('labels', torch.zeros(num_samples, num_features, dtype=torch.long))
@@ -43,8 +45,17 @@ class MemoryBank(nn.Module):
         for x, y in zip(inputs, targets):
             if self.manifold is None:
                 updated = self.momentum * features[y] + (1. - self.momentum) * x
-                updated_norm = updated.norm().clamp_min(self.eps)
-                features[y] = updated / updated_norm
+                if self.split_norm and self.split_norm > 0:
+                    split = self.split_norm
+                    head = updated[:split]
+                    tail = updated[split:]
+                    head_norm = head.norm().clamp_min(self.eps)
+                    head = head / head_norm
+                    updated = torch.cat([head, tail])
+                else:
+                    updated_norm = updated.norm().clamp_min(self.eps)
+                    updated = updated / updated_norm
+                features[y] = updated
             else:
                 # Update in the tangent space at the origin, mirroring poincare-embeddings momentum.
                 current = features[y].unsqueeze(0)

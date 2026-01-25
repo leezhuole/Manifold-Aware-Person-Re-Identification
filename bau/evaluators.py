@@ -85,7 +85,7 @@ def extract_features(model, data_loader, print_freq=50):
     return features, labels
 
 
-def pairwise_distance(features, query=None, gallery=None, manifold=None, alpha=None):
+def pairwise_distance(features, query=None, gallery=None, manifold=None, alpha=None, dist_func=euclidean_dist):
     """
     Manifold-aware pairwise distance computation.
 
@@ -106,7 +106,7 @@ def pairwise_distance(features, query=None, gallery=None, manifold=None, alpha=N
             #     dist_m = dist_m.expand(n, n) - 2 * torch.mm(x, x.t())
             # else:
             #     dist_m = euclidean_dist(x, x, alpha=alpha)
-            dist_m = euclidean_dist(x, x, alpha=alpha)
+            dist_m = dist_func(x, x, alpha=alpha)
         else:
             dist_m = manifold.dist(x.unsqueeze(1), x.unsqueeze(0), dim=-1)
         return dist_m
@@ -132,7 +132,7 @@ def pairwise_distance(features, query=None, gallery=None, manifold=None, alpha=N
         #     dist_m.addmm_(mat1=x, mat2=y.t(), beta=1, alpha=-2)
         # else:
         #     dist_m = euclidean_dist(x, y, alpha=alpha)
-        dist_m = euclidean_dist(x, y, alpha=alpha)
+        dist_m = dist_func(x, y, alpha=alpha)
     else:
         # 2. Handle Memory Explosion: Compute distances in blocks ON GPU
         # We chunk BOTH query and gallery to keep intermediate tensors small.
@@ -216,13 +216,36 @@ class Evaluator(object):
         module = getattr(model, 'module', model)
         self.manifold = getattr(module, 'manifold', None)
         self.alpha_module = alpha_module
+        self.dist_func = getattr(module, 'dist_func', euclidean_dist)
+        self.select_eval_embedding = getattr(module, 'select_eval_embedding', None)
+        self.use_drift_in_eval = getattr(module, 'use_drift_in_eval', True)
+
+    def _apply_eval_selector(self, features):
+        """
+        It applies the model’s select_eval_embedding hook to each stored feature, letting 
+        evaluation use a subset (e.g., identity‑only vs identity+drift) without changing extraction logic.
+        """
+        if self.select_eval_embedding is None:
+            return features
+        selected = OrderedDict()
+        
+        # It allows the evaluator to "ask" the model which part of the embedding vector should 
+        # actually be used for calculating distances and accuracy.
+        for key, value in features.items():
+            selected[key] = self.select_eval_embedding(value.unsqueeze(0)).squeeze(0)
+        return selected
 
     def evaluate(self, data_loader, query, gallery, cmc_flag=False, rerank=False, cmc_topk=(1, 5, 10)):
         print('Start evaluation ...')
         features, labels = extract_features(self.model, data_loader)
+        features = self._apply_eval_selector(features)
         alpha_value = self.alpha_module.value() if self.alpha_module is not None else None
+        dist_func = self.dist_func
+        if not self.use_drift_in_eval:
+            dist_func = euclidean_dist
+            alpha_value = None
         distmat, query_features, gallery_features = pairwise_distance(
-            features, query, gallery, manifold=self.manifold, alpha=alpha_value
+            features, query, gallery, manifold=self.manifold, alpha=alpha_value, dist_func=dist_func
         )
         distmat = distmat.cpu()
         
@@ -264,8 +287,8 @@ class Evaluator(object):
             return results
 
         print('Applying person re-ranking ...')
-        distmat_qq, _, _ = pairwise_distance(features, query, query, manifold=self.manifold, alpha=alpha_value)
-        distmat_gg, _, _ = pairwise_distance(features, gallery, gallery, manifold=self.manifold, alpha=alpha_value)
+        distmat_qq, _, _ = pairwise_distance(features, query, query, manifold=self.manifold, alpha=alpha_value, dist_func=dist_func)
+        distmat_gg, _, _ = pairwise_distance(features, gallery, gallery, manifold=self.manifold, alpha=alpha_value, dist_func=dist_func)
         distmat = re_ranking(distmat.cpu().numpy(), distmat_qq.cpu().numpy(), distmat_gg.cpu().numpy())
         
         return evaluate_all(query_features, gallery_features, distmat, vis_fig, query=query, gallery=gallery, cmc_flag=cmc_flag, cmc_topk=cmc_topk)
