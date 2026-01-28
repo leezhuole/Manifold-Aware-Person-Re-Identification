@@ -28,17 +28,17 @@ class AlphaParameter(nn.Module):
 		self.max_alpha = float(max_alpha)
 		self.temperature = float(temperature)
 
-		effective_init = init if init > 1e-3 else 1e-3
-		self.raw_alpha = nn.Parameter(self._init_raw_alpha(effective_init))
-		# self.raw_alpha = nn.Parameter(self._init_raw_alpha(init))
+		# effective_init = init if init > 1e-3 else 1e-3
+		# self.raw_alpha = nn.Parameter(self._init_raw_alpha(effective_init))
+		self.raw_alpha = nn.Parameter(self._init_raw_alpha(init))
 
 	def value(self) -> torch.Tensor:
 		# Centered, symmetric parameterization
-		# sig = torch.sigmoid(self.raw_alpha / self.temperature)
-		# val = 2.0 * self.max_alpha * torch.abs(sig - 0.5)
+		sig = torch.sigmoid(self.raw_alpha / self.temperature)
+		val = 2.0 * self.max_alpha * torch.abs(sig - 0.5)
 
 		# Simple monotonic sigmoid (Range: [0, max_alpha]))
-		val = self.max_alpha * torch.sigmoid(self.raw_alpha / self.temperature) 	
+		# val = self.max_alpha * torch.sigmoid(self.raw_alpha / self.temperature) 	
 		return val
 	
 	def raw_value(self) -> torch.Tensor:
@@ -52,14 +52,14 @@ class AlphaParameter(nn.Module):
 		eps = 1e-6
 
 		# Centered, symmetric parameterization
-		# y_norm = init_clamped / (2.0 * self.max_alpha)
-		# target_sigmoid = y_norm + 0.5
-		# target_sigmoid = min(max(target_sigmoid, 0.5 + eps), 1.0 - eps)
-		# raw = (torch.log(torch.tensor(target_sigmoid)) - torch.log(torch.tensor(1.0 - target_sigmoid)))
+		y_norm = init_clamped / (2.0 * self.max_alpha)
+		target_sigmoid = y_norm + 0.5
+		target_sigmoid = min(max(target_sigmoid, 0.5 + eps), 1.0 - eps)
+		raw = (torch.log(torch.tensor(target_sigmoid)) - torch.log(torch.tensor(1.0 - target_sigmoid)))
 
 		# Simple monotonic sigmoid (Range: [0, max_alpha]))
-		p = init_clamped / self.max_alpha
-		raw = torch.log(torch.tensor(p)) - torch.log(torch.tensor(1.0 - p))
+		# p = init_clamped / self.max_alpha
+		# raw = torch.log(torch.tensor(p)) - torch.log(torch.tensor(1.0 - p))
 		return raw * self.temperature
 
 

@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=bau-ablation-finsler         # Job name
-#SBATCH --array=0-10                             # 10 runs: 0-9
+#SBATCH --job-name=bau-ablation-euclidean       # Job name
+#SBATCH --array=0-10                            # 11 runs: 0-10
 #SBATCH --gres=gpu:1,VRAM:28G                   # Request two 24GB-class GPUs 
 #SBATCH --nodes=1                               # Run all processes on a single node
 #SBATCH --cpus-per-task=5                       # Number of CPU cores per task
@@ -8,12 +8,11 @@
 #SBATCH --time=12:00:00                         # Time limit hrs:min:sec
 #SBATCH --exclude=node7,node9,node1,node13    # Exclude problematic nodes
 # #SBATCH --constraint="GPU_MODEL:a40"          # Ensure A40-class GPU
-#SBATCH --output=logs/ablationFinsler-P2-learnableAlpha-%A_%a.out     # Standard output log
-#SBATCH --error=logs/ablationFinsler-P2-learnableAlpha-%A_%a.err      # Error log
+#SBATCH --output=logs/ablationEuclidean-%A_%a.out     # Standard output log
+#SBATCH --error=logs/ablationEuclidean-%A_%a.err      # Error log
 
 set -euo pipefail
 ROOT=/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification
-mkdir -p ${ROOT}/logs/ablationFinsler-P2-learnableAlpha
 
 # Activate the environment
 source ~/miniconda3/etc/profile.d/conda.sh
@@ -31,11 +30,6 @@ KNN=10                          # Default
 ITERS=500                       # Default
 WARMUP_STEP=10                  # Default
 EPOCHS=60                       # Default
-
-# Finsler parameters
-ALPHA_INIT=0.1
-ALPHA_MAX=1.0
-ALPHA_TEMP=1.0
 
 # Loss configurations (Hierarchy: Baseline -> Single -> Dual -> Triple -> Full)
 LOSS_CONFIGS=(
@@ -65,19 +59,17 @@ LOSS_NAMES=(
   "11_Full_Method"
 )
 
-
 # Determine indices for this task
 LOSS_IDX=$((SLURM_ARRAY_TASK_ID % ${#LOSS_CONFIGS[@]}))
 SELECTED_LOSS_CONFIG=${LOSS_CONFIGS[$LOSS_IDX]}
 SELECTED_LOSS_NAME=${LOSS_NAMES[$LOSS_IDX]}
 
-LOGS_DIR="${ROOT}/logs/ablationFinsler-P2-learnableAlpha/job_alphainit0.1_${SELECTED_LOSS_NAME}_cuhk03"
-WANDB_NAME="ablationFinsler_alphainit0.1_${SELECTED_LOSS_NAME}_cuhk03"
+LOGS_DIR="${ROOT}/logs/ablationEuclideanP3_2501/job_${SELECTED_LOSS_NAME}_cuhk03"
+WANDB_NAME="ablationEuclidean_${SELECTED_LOSS_NAME}_cuhk03"
 
 echo "Starting ablation task ${SLURM_ARRAY_TASK_ID}"
 echo "  Loss Name: ${SELECTED_LOSS_NAME}"
 echo "  Loss Config: ${SELECTED_LOSS_CONFIG}"
-echo "  Alpha Init: ${ALPHA_INIT}"
 
 mkdir -p "${LOGS_DIR}"
 
@@ -95,8 +87,5 @@ srun --unbuffered python examples/train_bau.py \
   --logs-dir "${LOGS_DIR}" \
   --wandb-name "${WANDB_NAME}" \
   --verbosity 2 \
-  --alpha-init "${ALPHA_INIT}" \
-  --alpha-max "${ALPHA_MAX}" \
-  --alpha-temp "${ALPHA_TEMP}" \
   "${LOSS_ARGS[@]}"
 

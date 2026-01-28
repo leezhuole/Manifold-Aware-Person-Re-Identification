@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=bau-finsler                # Job name
-#SBATCH --array=0-4                          # One task per alpha/run combo (3 alphas * 5 runs)
+#SBATCH --job-name=bau-finsler-RNG            # Job name
+#SBATCH --array=0-9                           # Two loss configs * 5 runs each
 #SBATCH --gres=gpu:1,VRAM:28G                 # Request one 48GB-class GPU (reduce OOM risk)
 #SBATCH --nodes=1                             # Run all processes on a single node
 #SBATCH --cpus-per-task=5                     # Number of CPU cores per task
@@ -12,14 +12,16 @@
 #SBATCH --error=logs/finslerRNG-%A_%a.err        # Error log per array task
 
 set -euo pipefail
-mkdir -p logs/finsler_alphaRNG
+ROOT=/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification
+mkdir -p ${ROOT}/logs/finsler_duet_rng
 
 # Activate the environment
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate BAU
 
-# Ensure local repo is on Python path for srun processes
-export PYTHONPATH=/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification
+# Ensure we run from the repo root and import the local bau package
+cd "${ROOT}"
+export PYTHONPATH="${ROOT}:${PYTHONPATH}"
 
 # Base hyper-parameters (shared across jobs)
 ARCH=resnet50                   # Default
@@ -31,18 +33,39 @@ WARMUP_STEP=10                  # Default
 EPOCHS=60                       # Default
 
 # Finsler alpha values (sweep narrowed to three)
-ALPHAS=None
-RUNS_PER_ALPHA=5
+# ALPHAS=None
+# RUNS_PER_ALPHA=5
 
-ALPHA_INDEX=$((SLURM_ARRAY_TASK_ID / RUNS_PER_ALPHA))
-RUN_INDEX=$((SLURM_ARRAY_TASK_ID % RUNS_PER_ALPHA + 1))
-ALPHA=${ALPHAS[ALPHA_INDEX]}
+# ALPHA_INDEX=$((SLURM_ARRAY_TASK_ID / RUNS_PER_ALPHA))
+# RUN_INDEX=$((SLURM_ARRAY_TASK_ID % RUNS_PER_ALPHA + 1))
+# ALPHA=${ALPHAS[ALPHA_INDEX]}
 
-RUN_TAG="alpha${ALPHA}_run${RUN_INDEX}"
-LOGS_DIR="$(pwd)/logs/finsler_alphaRNG/job_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}_${RUN_TAG}"
-WANDB_NAME="${RUN_TAG}"
+# Finsler parameters (learnable alpha as in ablation)
+ALPHA_INIT=0.1
+ALPHA_MAX=1.0
+ALPHA_TEMP=1.0
 
-echo "Starting finsler task ${SLURM_ARRAY_TASK_ID} | Alpha ${ALPHA} | Run ${RUN_INDEX}"
+# Loss configs 9 and 11 from ablation script
+LOSS_CONFIGS=(
+  "--no-uniform"
+  ""
+)
+LOSS_NAMES=(
+  "9_Base_Align_Dom"
+  "11_Full_Method"
+)
+RUNS_PER_CONFIG=5
+
+LOSS_INDEX=$((SLURM_ARRAY_TASK_ID / RUNS_PER_CONFIG))
+RUN_INDEX=$((SLURM_ARRAY_TASK_ID % RUNS_PER_CONFIG + 1))
+SELECTED_LOSS_CONFIG=${LOSS_CONFIGS[$LOSS_INDEX]}
+SELECTED_LOSS_NAME=${LOSS_NAMES[$LOSS_INDEX]}
+
+RUN_TAG="${SELECTED_LOSS_NAME}_run${RUN_INDEX}"
+LOGS_DIR="${ROOT}/logs/finsler_duet_rng/job_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}_${RUN_TAG}"
+WANDB_NAME="finsler_duet_rng_${RUN_TAG}"
+
+echo "Starting finsler task ${SLURM_ARRAY_TASK_ID} | Loss ${SELECTED_LOSS_NAME} | Run ${RUN_INDEX}"
 echo "Logs dir: ${LOGS_DIR}"
 
 mkdir -p "${LOGS_DIR}"
@@ -59,4 +82,7 @@ srun --unbuffered python examples/train_bau.py \
   --logs-dir "${LOGS_DIR}" \
   --wandb-name "${WANDB_NAME}" \
   --verbosity 2 \
-  --alpha "${ALPHA}"
+  --alpha-init "${ALPHA_INIT}" \
+  --alpha-max "${ALPHA_MAX}" \
+  --alpha-temp "${ALPHA_TEMP}" \
+  ${SELECTED_LOSS_CONFIG}
