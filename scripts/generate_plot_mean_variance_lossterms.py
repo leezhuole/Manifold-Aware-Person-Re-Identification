@@ -2,7 +2,7 @@
 """Parse loss ablation logs and generate publication-style plots.
 
 This script scans a loss-ablation log root (default:
-``logs/ablationFinsler-P2``), extracts the *last* recorded ``Mean AP`` and
+``logs/finsler_duet_rng``), extracts the *last* recorded ``Mean AP`` and
 ``Rank-1/top-1`` values from each run directory, groups them by the loss-term
 configuration found in the folder name, saves a CSV, and produces per-metric
 plots (mAP and Rank-1) with mean±std error bars.
@@ -31,13 +31,14 @@ import numpy as np
 
 # Default locations (override via CLI if needed)
 DEFAULT_LOG_ROOT = Path(
-    "/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/logs/ablationFinsler-P2"
+    "/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/logs/finsler_duet_rng"
 )
 DEFAULT_CSV = Path("loss_ablation_results.csv")
 DEFAULT_PLOT = Path("loss_ablation_plot.png")
 
 # Ordering of loss configs (matches sbatch LOSS_NAMES ordering)
 LOSS_ORDER: List[str] = ["L_ce", "L_triplet", "L_align", "L_uniform", "L_domain"]
+BASELINE_NAMES: List[str] = ["alphaNone"]
 
 # Directory naming pattern from sbatch: job_${JOBID}_${TASKID}_${LOSS}_run${RUN}
 RUN_DIR_PATTERN = re.compile(r"job_\d+_\d+_(?P<loss>[A-Za-z0-9_]+)_run(?P<run>\d+)")
@@ -172,11 +173,32 @@ def _iter_log_files(run_dir: Path) -> Iterable[Path]:
 
 
 def _ordered_loss_names(loss_names: Iterable[str]) -> List[str]:
-    """Return loss names ordered by LOSS_ORDER, then any extras alphabetically."""
+    """Return loss names ordered by priority, numeric prefix, or alpha."""
 
-    known = [name for name in LOSS_ORDER if name in loss_names]
-    extras = sorted(name for name in loss_names if name not in LOSS_ORDER)
-    return known + extras
+    names = list(dict.fromkeys(loss_names))
+    baseline_set = {name.lower() for name in BASELINE_NAMES}
+    baseline = [name for name in names if name.lower() in baseline_set]
+    remaining = [name for name in names if name not in baseline]
+
+    if any(name in LOSS_ORDER for name in remaining):
+        known = [name for name in LOSS_ORDER if name in remaining]
+        extras = sorted(name for name in remaining if name not in known)
+        return baseline + known + extras
+
+    numeric_pairs = []
+    non_numeric = []
+    for name in remaining:
+        match = re.match(r"^(\d+)_", name)
+        if match:
+            numeric_pairs.append((int(match.group(1)), name))
+        else:
+            non_numeric.append(name)
+
+    if numeric_pairs:
+        ordered_numeric = [name for _, name in sorted(numeric_pairs, key=lambda x: x[0])]
+        return baseline + ordered_numeric + sorted(non_numeric)
+
+    return baseline + sorted(remaining)
 
 
 def scan_logs(root_dir: Path) -> pd.DataFrame:
@@ -288,7 +310,8 @@ def _report_sanity(df: pd.DataFrame) -> None:
 
 
 def plot_metric(
-    df: pd.DataFrame,
+    df_runs: pd.DataFrame,
+    agg_stats: pd.DataFrame,
     metric_name: str,
     output_path: Path,
     color: str = "#c0392b",
@@ -297,26 +320,42 @@ def plot_metric(
 
     setup_plot_style()
 
-    names = df["LossName"].astype(str).tolist()
-    scores = df[f"{metric_name}_mean"].to_numpy()
-    errors = df[f"{metric_name}_std"].to_numpy()
+    names = agg_stats["LossName"].astype(str).tolist()
+    scores = agg_stats[f"{metric_name}_mean"].to_numpy()
+    errors = agg_stats[f"{metric_name}_std"].to_numpy()
 
     positions = np.arange(len(names))
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    ax.errorbar(
+    ax.scatter(
         positions,
         scores,
-        yerr=errors,
-        marker="o",
-        linestyle="none",
         color=color,
-        capsize=5,
-        linewidth=2.5,
-        markersize=10,
-        label="Mean ± Std",
+        s=130,
+        alpha=0.7,
+        edgecolor="white",
+        linewidth=1.2,
+        zorder=4,
+        label="Mean",
     )
+
+    for idx, loss_name in enumerate(agg_stats["LossName"].astype(str)):
+        group = df_runs[df_runs["LossName"].astype(str) == loss_name]
+        if group.empty:
+            continue
+        y_vals = group[metric_name].to_numpy()
+        x_offsets = np.zeros(len(y_vals))
+        ax.scatter(
+            idx + x_offsets,
+            y_vals,
+            color=color,
+            alpha=0.8,
+            s=45,
+            edgecolor="white",
+            linewidth=0.6,
+            zorder=3,
+        )
 
     ax.set_xlabel("Loss Configuration", fontweight="bold")
     ax.set_ylabel(f"{metric_name} (%)", color=color, fontweight="bold")
@@ -367,7 +406,7 @@ def plot_metric(
         print(f"[INFO] Best {metric_name}: {names[best_idx]} ({best_score:.2f}%)")
 
 
-def plot_results(df: pd.DataFrame, output_path: Path) -> None:
+def plot_results(df_runs: pd.DataFrame, agg_stats: pd.DataFrame, output_path: Path) -> None:
     """Generate separate plots for mAP and Rank-1."""
 
     base_name = output_path.stem
@@ -375,10 +414,10 @@ def plot_results(df: pd.DataFrame, output_path: Path) -> None:
     extension = output_path.suffix
 
     map_path = parent / f"{base_name}_mAP{extension}"
-    plot_metric(df, "mAP", map_path, color="#c0392b")
+    plot_metric(df_runs, agg_stats, "mAP", map_path, color="#c0392b")
 
     rank1_path = parent / f"{base_name}_Rank1{extension}"
-    plot_metric(df, "Rank-1", rank1_path, color="#1f618d")
+    plot_metric(df_runs, agg_stats, "Rank-1", rank1_path, color="#1f618d")
 
 
 def main() -> None:
@@ -405,7 +444,7 @@ def main() -> None:
     csv_df.to_csv(args.output_csv, index=False, float_format=float_format)
     print(f"[GEN] CSV saved to {args.output_csv}")
 
-    plot_results(agg_stats, args.output_plot)
+    plot_results(df_runs, agg_stats, args.output_plot)
 
 
 if __name__ == "__main__":
