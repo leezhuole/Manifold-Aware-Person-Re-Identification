@@ -7,8 +7,8 @@
 #SBATCH --time=12:00:00                       # Time limit hrs:min:sec per task
 #SBATCH --exclude=node7,node9,node1,node13    # Exclude problematic nodes
 # #SBATCH --constraint="GPU_MODEL:a40"          # Ensure specific GPU model if available
-#SBATCH --output=logs/fins_learnableAlpha/finsler-%j.out          # Standard output log
-#SBATCH --error=logs/fins_learnableAlpha/finsler-%j.err           # Error log
+#SBATCH --output=logs/fins_learnableOmega/finsler-%j.out          # Standard output log
+#SBATCH --error=logs/fins_learnableOmega/finsler-%j.err           # Error log
 
 set -euo pipefail
 
@@ -29,7 +29,7 @@ WARMUP_STEP=10                  # Default
 EPOCHS=60                       # Default
 
 LOGS_DIR="$(pwd)/logs/learnableOmega/job_${SLURM_JOB_ID}"
-WANDB_NAME="learnableOmega_cuhk03"
+WANDB_NAME="learnableOmega_euclideanAlign_cuhk03"
 echo "Starting finsler experimentation | Learnable omega"
 echo "Logs dir: ${LOGS_DIR}"
 

@@ -211,13 +211,14 @@ class BAUTrainer(object):
     
     def align_loss(self, f_w, f_s, y, w, alpha=None):
 
-        effective_dist_func = self.dist_func
-        if effective_dist_func is finsler_drift_dist and f_w.size(1) == 2048:
-            effective_dist_func = euclidean_dist
+        # Disable algin loss because it has opposing gradients with triplet/CE loss at the moment
+        # effective_dist_func = self.dist_func
+        # if effective_dist_func is finsler_drift_dist and f_w.size(1) == 2048:
+        #     effective_dist_func = euclidean_dist
 
         # Case 2: Finsler spaces and Euclidean Manifold
         if self.manifold is None:
-            dist_squared = effective_dist_func(f_s, f_w, alpha).pow(2)
+            dist_squared = euclidean_dist(f_s, f_w, alpha=None).pow(2)
 
         # Case 3: Non-euclidean manifold
         elif self.manifold is not None:
