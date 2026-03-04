@@ -197,3 +197,14 @@ If `--arch resnet50_finsler` is used, `--manifold-aware` is forced to Euclidean.
 Additionally, incompatible configurations are explicitly rejected:
 
 - Finsler model with a manifold-aware backbone triggers a user-facing error.
+---
+
+## README Overhaul | 04.03.2026
+
+**File modified:** `README.md`
+
+**Problem:** The README described a speculative three-experiment roadmap (Hyperbolic Head, Hyperbolic Metric, HVT Backbone) that was never implemented. It contained no information about what was actually built.
+
+**Changes:** Replaced the entire README with a concise contribution-focused document covering: (1) the `resnet50_finsler` backbone and `FinslerDriftHead`, (2) the learnable `AlphaParameter` for continuous Euclidean-to-Randers interpolation, (3) the gradient-isolated drift training scheme with its loss-component gradient flow table, (4) the multi-view AG-ReIDv2 dataset splits, plus setup, training CLI examples, and project structure.
+
+**Expected behaviour:** The README now accurately reflects the implemented codebase and serves as an up-to-date reference for new contributors.
