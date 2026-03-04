@@ -1,6 +1,7 @@
 from __future__ import absolute_import
 
 from typing import Tuple, cast
+from functools import partial
 
 import torch
 from torch import nn
@@ -99,12 +100,19 @@ def finsler_drift_dist(
 	y: torch.Tensor,
 	alpha=None,
 	identity_dim: int | None = None,
+	method: str = "symmetric_trapezoidal",
 ) -> torch.Tensor:
 	"""
 	Compute Randers/Finsler distance using concatenated [identity | drift] embeddings.
 
 	If identity_dim is provided, it defines the split point between identity and drift.
 	Otherwise, the feature dimension is split evenly.
+	
+	Available methods:
+	- "constant_drift": Option 1, Assume drift vector constant along trajectory
+	- "symmetric_trapezoidal": Option 2, Symmetric Trapezoidal Approximation
+	- "slerp": Option 3.1, SLERP Approximation (Geodesic Path)
+	- "analytical": Option 3.2, Exact Analytical Integration of the Parallel-Transported Field
 	"""
 	if x.size(1) != y.size(1):
 		raise ValueError("finsler_drift_dist requires x and y to have the same feature dimension")
@@ -140,13 +148,6 @@ def finsler_drift_dist(
 	identity_x_shared = identity_x[:, :shared_dim]
 	identity_y_shared = identity_y[:, :shared_dim]
 
-	# Option 1: Assume drift vector constant along trajectory
-	#Note: This distance function discards the rest of the dimensions that aren't shared
-	# term_a = torch.mm(drift_x_shared, identity_y_shared.t())
-	# term_b = (drift_x_shared * identity_x_shared).sum(dim=1, keepdim=True).expand(m, n)
-	# asymmetry = term_a - term_b
-
-	# Option 2: Symmetric Trapezoidal Approximation
 	# 1. x_w * y_id (MxN)
 	term_xy = torch.mm(drift_x_shared, identity_y_shared.t())
 
@@ -160,39 +161,59 @@ def finsler_drift_dist(
 	# Note: (y_w @ x_id.T).T is equivalent to x_id @ y_w.T
 	term_yx = torch.mm(identity_x_shared, drift_y_shared.t())
 
-	asymmetry = 0.5 * ((term_xy - term_xx) + (term_yy - term_yx))
+	if method == "constant_drift":
+		# Option 1: Assume drift vector constant along trajectory
+		asymmetry = term_xy - term_xx
+	elif method == "symmetric_trapezoidal":
+		# Option 2: Symmetric Trapezoidal Approximation
+		asymmetry = 0.5 * ((term_xy - term_xx) + (term_yy - term_yx))
+	elif method == "slerp":
+		# Option 3.1: SLERP Approximation (Geodesic Path)
+		# Compute Angular Distance 
+		cos_theta = torch.clamp(torch.mm(identity_x_shared, identity_y_shared.t()), -1.0 + 1e-6, 1.0 - 1e-6)
+		theta = torch.acos(cos_theta)
+		sin_theta = torch.clamp(torch.sin(theta), min=1e-6)
+		theta_sin_ratio = torch.where(theta < 1e-5, torch.ones_like(theta), theta / sin_theta)
 
-	# Option 3: Spherical Trapezoidal Approximation (Geodesic Path)
-	# Removes the Euclidean straight-line assumption. Since identity features are L2 normalized, 
-	# the path is a great circle arc. We project the path tangents onto the hypersphere.
+		# Discretize the Path (Riemann sum)
+		K = 10
+		dt = 1.0 / K
+		t_steps = torch.linspace(dt / 2.0, 1.0 - dt / 2.0, steps=K, device=dist.device)
+		
+		asymmetry = torch.zeros_like(theta)
 
-	# # 1. x_w * y_id (MxN)
-	# term_xy = torch.mm(drift_x_shared, identity_y_shared.t())
-
-	# # 2. x_w * x_id (Mx1 -> MxN)
-	# term_xx = (drift_x_shared * identity_x_shared).sum(dim=1, keepdim=True).expand(m, n)
-
-	# # 3. y_w * y_id (Nx1 -> NxM -> MxN via transpose)
-	# term_yy = (drift_y_shared * identity_y_shared).sum(dim=1, keepdim=True).expand(n, m).t()
-
-	# # 4. y_w * x_id (NxM -> MxN via transpose of the matmul result)
-	# # Note: (y_w @ x_id.T).T is equivalent to x_id @ y_w.T
-	# term_yx = torch.mm(identity_x_shared, drift_y_shared.t())
+		# Compute Trajectory, Velocity, Drift Vector Field, and Riemann Sum
+		for t in t_steps:
+			# Velocity coefficients
+			A_t = - theta_sin_ratio * torch.cos((1.0 - t) * theta)
+			B_t = theta_sin_ratio * torch.cos(t * theta)
+			
+			vel_overlap = (1.0 - t) * A_t * term_xx + \
+						  (1.0 - t) * B_t * term_xy + \
+						  t * A_t * term_yx + \
+						  t * B_t * term_yy
+			
+			asymmetry += vel_overlap * dt
 	
-	# cos_sim = torch.mm(identity_x_shared, identity_y_shared.t())
+	elif method == "analytical":
+		# Option 3.2: Exact Analytical Integration of the Parallel-Transported Field
+		cos_theta = torch.clamp(torch.mm(identity_x_shared, identity_y_shared.t()), -1.0 + 1e-6, 1.0 - 1e-6)
+		theta = torch.acos(cos_theta)
+		sin_theta = torch.clamp(torch.sin(theta), min=1e-6)
+		theta_sin_ratio = torch.where(theta < 1e-5, torch.ones_like(theta), theta / sin_theta)
 
-	# # Tangent at x pointing to y: y - cos(theta)*x
-	# # Tangent at y coming from x: y*cos(theta) - x
-	# asymmetry = 0.5 * ((term_xy - cos_sim * term_xx) + (cos_sim * term_yy - term_yx))
+		asymmetry = 0.5 * theta_sin_ratio * (term_xy - term_yx)
+	else:
+		raise ValueError(f"Unknown finsler drift computation method: '{method}'")
 
 	# --- PROPOSED SCALING TEST ---   
-    # Uncomment ONE of the following scaling methods to test:
-    # # 1. The N/S Test (Thomas's suggestion to prove the artifact)
+	# Uncomment ONE of the following scaling methods to test:
+	# # 1. The N/S Test (Thomas's suggestion to prove the artifact)
 	scaling_factor = identity_x.size(1) / shared_dim 
-    
-    # # 2. Dimension-Invariant Normalization (To fairly compare dimensions)
+	
+	# # 2. Dimension-Invariant Normalization (To fairly compare dimensions)
 	# # import math
-	# # scaling_factor = 1.0 / math.sqrt(shared_dim) 
+	# # scaling_factor = 1.0 / math.sqrt(shared_dim)
 	
 	asymmetry = asymmetry * scaling_factor
 	# -----------------------------
@@ -253,7 +274,17 @@ class TripletLoss(nn.Module):
 		self.normalize_feature = normalize_feature
 		self.manifold = manifold
 		self.alpha = alpha
-		self.dist_func = dist_func
+		
+		# Intercept and force symmetric_trapezoidal if finsler_drift_dist is used
+		if isinstance(dist_func, partial) and getattr(dist_func.func, "__name__", "") == "finsler_drift_dist":
+			new_kwargs = dist_func.keywords.copy()
+			new_kwargs["method"] = "symmetric_trapezoidal"
+			self.dist_func = partial(dist_func.func, *dist_func.args, **new_kwargs)
+		elif getattr(dist_func, "__name__", "") == "finsler_drift_dist":
+			self.dist_func = partial(dist_func, method="symmetric_trapezoidal")
+		else:
+			self.dist_func = dist_func
+
 		self.bidirectional = bidirectional
 		if margin is not None:
 			self.margin_loss = nn.MarginRankingLoss(margin=float(margin)).cuda()

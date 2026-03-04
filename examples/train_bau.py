@@ -150,6 +150,7 @@ def create_model(args, num_classes, manifold):
             use_drift_in_eval=args.eval_drift,
             memory_bank_mode=args.memory_bank_mode,
             drift_dim=args.drift_dim,
+            drift_method=args.drift_method,
         )
     else:
         model = models.create(args.arch, num_classes=num_classes, manifold=manifold)
@@ -658,6 +659,9 @@ if __name__ == '__main__':
     parser.add_argument('--alpha-temp', type=float, default=1.0, help='temperature for scaled sigmoid')
     parser.add_argument('--eval-drift', type=lambda x: x.lower() == 'true', default=True,
                         help='use drift branch in evaluation ranking (resnet50_finsler only)')
+    parser.add_argument('--drift-method', type=str, default='symmetric_trapezoidal', 
+                        choices=['constant_drift', 'symmetric_trapezoidal', 'slerp', 'analytical'],
+                        help='method for calculating the finsler drift asymmetry (resnet50_finsler only)')
     parser.add_argument('--memory-bank-mode', type=str, default='full', choices=['full', 'identity'],
                         help='memory bank embedding mode for resnet50_finsler')
     parser.add_argument('--drift-dim', type=int, default=2048,

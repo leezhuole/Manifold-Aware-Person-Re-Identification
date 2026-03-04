@@ -28,11 +28,12 @@ ITERS=500                       # Default
 EPOCHS=60                       # Reduced from 60 to 20 for faster iteration and to fit within time limits
 # WARMUP_STEP=3                   # Proportionally scale warmup steps to 20 epochs (originally 10 for 60 epochs)
 # MILESTONES="10 15"              # Proportionally scale milestones to 20 epochs (originally 30 and 50 for 60 epochs)
-OMEGA_REG_WEIGHT=5.0            # New hyper-parameter for omega regularization weight
-
+# OMEGA_REG_WEIGHT=5.0            # New hyper-parameter for omega regularization weight
+DRIFT_METHOD=slerp         # Method for calculating the finsler distance [constant_drift, symmetric_trapezoidal, slerp, analytical]
 
 # Run Specific
-RUN_NAME="FHSigGate+ModFinsDist_BidirectTri_OmegaReg${OMEGA_REG_WEIGHT}"
+RUN_NAME="FHSigGate_Drift${DRIFT_METHOD}_BidirectTri_OrthoEnforced"
+# RUN_NAME="FHSigGate+ModFinsDist_BidirectTri_OmegaReg${OMEGA_REG_WEIGHT}"
 
 LOGS_DIR="$(pwd)/logs/AGReIDv2_sweep/job_${SLURM_JOB_ID}_dt_aerial_to_cctv_${RUN_NAME}"
 WANDB_NAME="AGReIDv2_learnableOmega_dt_aerial_to_cctv_${RUN_NAME}"
@@ -65,10 +66,14 @@ srun --unbuffered python "${SNAP_DIR}/examples/train_bau.py" \
   --eval-drift false \
   --memory-bank-mode full \
   --bidirectional-triplet \
-  --use-omega-reg \
-  --omega-reg-weight "${OMEGA_REG_WEIGHT}" \
+  --drift-method "${DRIFT_METHOD}" \
+  # --use-omega-reg \
+  # --omega-reg-weight "${OMEGA_REG_WEIGHT}" \
   # --use-drift-align \
   # --drift-dim 32 \
+
+
+# -- CLI INPUT GRAVEYARD --
   # --warmup-step "${WARMUP_STEP}" \
   # --milestones ${MILESTONES} \
   # -ds market1501 msmt17 cuhksysu \

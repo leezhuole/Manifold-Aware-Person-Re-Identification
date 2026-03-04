@@ -178,12 +178,13 @@ class resnet50_finsler(nn.Module):
         use_drift_in_eval=True,
         memory_bank_mode="full",
         drift_dim=2048,
+        drift_method="symmetric_trapezoidal",
     ):
         super(resnet50_finsler, self).__init__()
         self.num_classes = num_classes
         self.manifold = manifold
         self.identity_dim = 2048
-        self.dist_func = partial(finsler_drift_dist, identity_dim=self.identity_dim)
+        self.dist_func = partial(finsler_drift_dist, identity_dim=self.identity_dim, method=drift_method)
         if drift_dim is None:
             drift_dim = self.identity_dim
         if int(drift_dim) <= 0:
@@ -238,8 +239,13 @@ class resnet50_finsler(nn.Module):
         emb = self.pool(x)
         emb = emb.view(x.size(0), -1)
         identity = self.bn_neck(emb)
-        identity_norm = F.normalize(identity)
-        drift = self.drift_head(emb)
+        identity_norm = F.normalize(identity) # L2-normalized identity vector
+        drift = self.drift_head(emb)  # raw ambient vector w
+        
+        # -- Enforcing orthoganality between identity and drift --
+        inner_product = torch.sum(drift * identity_norm, dim=1, keepdim=True)
+        drift = drift - inner_product * identity_norm
+        
         combined_emb = torch.cat([emb, drift], dim=1)
         combined_f = torch.cat([identity_norm, drift], dim=1)
 
