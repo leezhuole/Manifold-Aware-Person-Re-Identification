@@ -5,6 +5,7 @@ from .memory import *
 
 __factory = {
     'resnet50': resnet50,
+    'resnet50_finsler': resnet50_finsler,
     'mobilenetv2': mobilenetv2,
     'vitbase': vit_base_patch16,
 }

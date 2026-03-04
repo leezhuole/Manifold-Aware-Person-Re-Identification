@@ -25,9 +25,9 @@ python examples/train_bau.py \
 - `alpha/value` is logged once per epoch when W&B is enabled.
 
 ## Implementation Notes (Learnable Alpha)
-
 - **Learnable parameter module:** `AlphaParameter` with scaled sigmoid in `bau/loss/triplet.py`.
 - **Training losses:** `BAUTrainer` now uses a global `alpha_module` and passes `alpha_value` to triplet/align/uniform/domain losses in `bau/trainers.py`.
+
 - **Evaluation distances:** pairwise distance now accepts `alpha` and uses it in `bau/evaluators.py`.
 - **Checkpointing:** `examples/train_bau.py` now saves dictionaries with `state_dict` and optional `alpha_state`.
 - **Loading:** `examples/train_bau.py` loads `alpha_state` if present (backward compatible with old checkpoints).

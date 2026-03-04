@@ -1,0 +1,23 @@
+Model,ConfigKey,ConfigLabel,mAP,Rank-1,FinalAlpha
+Euclidean,1_Abs_Baseline,Absolute Baseline,31.1,30.0,
+Finsler (Learnable α),1_Abs_Baseline,Absolute Baseline,30.8,29.7,0.5825
+Euclidean,2_Pure_Triplet,Pure Triplet,26.3,26.9,
+Finsler (Learnable α),2_Pure_Triplet,Pure Triplet,26.8,26.1,0.5334
+Euclidean,3_Std_Baseline,Std Baseline,20.7,21.7,
+Finsler (Learnable α),3_Std_Baseline,Std Baseline,20.3,21.8,0.9999
+Euclidean,4_CE_Align,CE + Ali.,37.2,37.6,
+Finsler (Learnable α),4_CE_Align,CE + Ali.,21.3,22.4,1.0
+Euclidean,5_Base_Align,Base + Ali.,40.2,41.1,
+Finsler (Learnable α),5_Base_Align,Base + Ali.,27.7,28.6,1.0
+Euclidean,6_Base_Uniform,Base + Uni.,19.8,19.9,
+Finsler (Learnable α),6_Base_Uniform,Base + Uni.,19.6,20.6,0.9995
+Euclidean,7_Base_Domain,Base + Dom.,14.0,14.2,
+Finsler (Learnable α),7_Base_Domain,Base + Dom.,11.3,11.0,0.9959
+Euclidean,8_Base_Align_Uni,Base + Ali. + Uni.,41.0,40.8,
+Finsler (Learnable α),8_Base_Align_Uni,Base + Ali. + Uni.,34.4,36.4,1.0
+Euclidean,9_Base_Align_Dom,Base + Ali. + Dom.,42.7,43.0,
+Finsler (Learnable α),9_Base_Align_Dom,Base + Ali. + Dom.,43.4,43.2,0.027
+Euclidean,10_Base_Uni_Dom,Base + Uni. + Dom.,14.3,14.8,
+Finsler (Learnable α),10_Base_Uni_Dom,Base + Uni. + Dom.,10.8,10.0,0.9941
+Euclidean,11_Full_Method,Full Method,41.8,42.6,
+Finsler (Learnable α),11_Full_Method,Full Method,42.9,43.1,0.0

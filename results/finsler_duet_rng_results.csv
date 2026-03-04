@@ -1,0 +1,16 @@
+LossName,mAP,Rank-1,LogDir,LogFile,mAP_mean,mAP_std,Rank-1_mean,Rank-1_std
+alphaNone,42.800,43.600,job_1483098_0_alphaNone_run1,log.txt,42.17999999999999,0.4494441010848843,42.4,0.7968688725254619
+alphaNone,42.500,42.100,job_1483098_1_alphaNone_run2,log.txt,,,,
+alphaNone,41.800,42.400,job_1483098_2_alphaNone_run3,log.txt,,,,
+alphaNone,41.800,41.400,job_1483098_3_alphaNone_run4,log.txt,,,,
+alphaNone,42.000,42.500,job_1483098_4_alphaNone_run5,log.txt,,,,
+9_Base_Align_Dom,42.400,42.800,job_1485934_0_9_Base_Align_Dom_run1,log.txt,42.82,0.38340579025361804,43.239999999999995,0.472228758124707
+9_Base_Align_Dom,42.800,42.900,job_1485934_1_9_Base_Align_Dom_run2,log.txt,,,,
+9_Base_Align_Dom,43.300,44.000,job_1485934_2_9_Base_Align_Dom_run3,log.txt,,,,
+9_Base_Align_Dom,42.500,43.200,job_1485934_3_9_Base_Align_Dom_run4,log.txt,,,,
+9_Base_Align_Dom,43.100,43.300,job_1485934_4_9_Base_Align_Dom_run5,log.txt,,,,
+11_Full_Method,42.600,43.000,job_1485934_5_11_Full_Method_run1,log.txt,42.2,0.418330013267037,42.32,0.8438009243891603
+11_Full_Method,42.100,41.400,job_1485934_6_11_Full_Method_run2,log.txt,,,,
+11_Full_Method,42.100,42.800,job_1485934_7_11_Full_Method_run3,log.txt,,,,
+11_Full_Method,42.600,43.000,job_1485934_8_11_Full_Method_run4,log.txt,,,,
+11_Full_Method,41.600,41.400,job_1485934_9_11_Full_Method_run5,log.txt,,,,

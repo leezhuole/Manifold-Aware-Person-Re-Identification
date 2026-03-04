@@ -1,5 +1,6 @@
 from __future__ import absolute_import
 import warnings
+from functools import partial
 
 from .cuhk02_DG import CUHK02_DG
 from .cuhk03 import CUHK03
@@ -13,7 +14,7 @@ from .grid import GRID
 from .ilids import iLIDS
 from .prid import PRID
 from .viper import VIPeR
-
+from .agreidv2 import AG_ReID_v2
 
 __factory = {
     'cuhk02dg': CUHK02_DG, # full (train+test) dataset for training
@@ -28,6 +29,18 @@ __factory = {
     'ilids': iLIDS,
     'prid': PRID,
     'viper': VIPeR,
+    # AG-ReID.v2 — full dataset (no camera filter)
+    'agreidv2': AG_ReID_v2,
+    # AG-ReID.v2 — cross-view experiments
+    'agreidv2_aerial_to_cctv':     partial(AG_ReID_v2, experiment='aerial_to_cctv'),
+    'agreidv2_aerial_to_wearable': partial(AG_ReID_v2, experiment='aerial_to_wearable'),
+    'agreidv2_cctv_to_aerial':     partial(AG_ReID_v2, experiment='cctv_to_aerial'),
+    'agreidv2_wearable_to_aerial': partial(AG_ReID_v2, experiment='wearable_to_aerial'),
+    # AG-ReID.v2 — view-filtered training splits (for multi-source domain training)
+    'agreidv2_aerial':   partial(AG_ReID_v2, view_filter='aerial'),
+    'agreidv2_wearable': partial(AG_ReID_v2, view_filter='wearable'),
+    'agreidv2_cctv':     partial(AG_ReID_v2, view_filter='cctv'),
+    'agreidv2_ground':   partial(AG_ReID_v2, view_filter='ground'),
 }
 
 

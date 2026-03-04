@@ -280,7 +280,15 @@ def main_worker(args):
         log("Initialized memory bank centroids (synthetic)", level=1)
     else:
         log("Extracting initial features for memory bank", level=1)
-        features, _ = extract_features(model, memory_loader, print_freq=50)
+        model_impl = getattr(model, 'module', model)
+        original_eval_drift = getattr(model_impl, 'use_drift_in_eval', None)
+        if original_eval_drift is not None:
+            model_impl.use_drift_in_eval = True
+        try:
+            features, _ = extract_features(model, memory_loader, print_freq=50)
+        finally:
+            if original_eval_drift is not None:
+                model_impl.use_drift_in_eval = original_eval_drift
         log("Finished feature extraction", level=1)
         features_dict = collections.defaultdict(list)
         for f, pid, _, _ in sorted(train_dataset.train):
