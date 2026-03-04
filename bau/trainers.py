@@ -23,8 +23,9 @@ except Exception:  # pragma: no cover - wandb is optional
 
 class BAUTrainer(object):
     def __init__(self, model, memory_bank, num_classes, margin, lam=1.5, k=10, manifold=None, manifold_chunk_size=None,
-                 use_aug_ce=False, use_align=True, use_uniform=True, use_domain=True, use_triplet=True, use_ce=True,
-                 alpha=None, alpha_module=None):
+                 use_aug_ce=False, use_align=True, use_drift_align=False, use_uniform=True, use_domain=True, use_triplet=True, 
+                 use_ce=True, alpha=None, alpha_module=None, bidirectional_triplet=False,
+                 use_omega_reg=False, omega_reg_weight=1.0):
         
         """
         Note that static alpha is not used during training. It is only set as a default when no alpha_module is provided
@@ -35,10 +36,17 @@ class BAUTrainer(object):
         self.memory_bank = memory_bank
         module = getattr(model, 'module', model)
         self.dist_func = getattr(module, 'dist_func', euclidean_dist)
+        self.identity_dim = getattr(module, 'identity_dim', None)  # e.g. 2048 for resnet50_finsler
         
         self.criterion_ce = CrossEntropyLabelSmooth(num_classes=num_classes).cuda()
         static_alpha = None if alpha_module is not None else alpha
-        self.criterion_tri = TripletLoss(margin=margin, manifold=manifold, alpha=static_alpha, dist_func=self.dist_func).cuda()
+        self.criterion_tri = TripletLoss(
+            margin=margin,
+            manifold=manifold,
+            alpha=static_alpha,
+            dist_func=self.dist_func,
+            bidirectional=bidirectional_triplet,
+        ).cuda()
         self.scaler = GradScaler()
 
         self.lam = lam
@@ -48,10 +56,13 @@ class BAUTrainer(object):
         
         self.use_aug_ce = use_aug_ce
         self.use_align = use_align
+        self.use_drift_align = use_drift_align
         self.use_uniform = use_uniform
         self.use_domain = use_domain
         self.use_triplet = use_triplet
         self.use_ce = use_ce
+        self.use_omega_reg = use_omega_reg
+        self.omega_reg_weight = omega_reg_weight
 
         # Finsler space parameter
         self.alpha = alpha
@@ -69,8 +80,10 @@ class BAUTrainer(object):
         losses_ce = AverageMeter()
         losses_tri = AverageMeter()
         losses_align = AverageMeter()
+        losses_drift_align = AverageMeter()
         losses_uniform = AverageMeter()
         losses_domain = AverageMeter()
+        losses_omega = AverageMeter()
         precisions = AverageMeter()
 
         time.sleep(1)
@@ -89,6 +102,16 @@ class BAUTrainer(object):
                 # f = F.normalize(f)        # already normalized in model
                 emb_w, emb_s = emb.chunk(2)
                 f_w, f_s = f.chunk(2)
+                if self.identity_dim is not None and f_w.size(1) > self.identity_dim: # Check that there is a drift vector concatenated
+                    f_w_align = f_w[:, :self.identity_dim]
+                    f_s_align = f_s[:, :self.identity_dim]
+                    f_w_drift = f_w[:, self.identity_dim:]
+                    f_s_drift = f_s[:, self.identity_dim:]
+                else:
+                    f_w_align = f_w
+                    f_s_align = f_s
+                    f_w_drift = None
+                    f_s_drift = None  
                 logits_w, logits_s = logits.chunk(2)
 
                 drift_norm_mean = None
@@ -100,6 +123,23 @@ class BAUTrainer(object):
                     drft_norm = drift.norm(p=2, dim=1)
                     drift_norm_mean = drft_norm.mean()
                     drift_norm_max = drft_norm.max()
+
+                # For Finsler models, create detached-identity versions of f_w/f_s
+                # for domain and uniform losses.  This prevents repulsion gradients
+                # from flowing into the backbone identity features, which would
+                # conflict with alignment and cause identity embeddings to diverge.
+                # if self.identity_dim is not None and f_w.size(1) > self.identity_dim:
+                #     f_w_repulse = torch.cat([
+                #         f_w[:, :self.identity_dim],
+                #         f_w[:, self.identity_dim:]
+                #     ], dim=1)
+                #     f_s_repulse = torch.cat([
+                #         f_s[:, :self.identity_dim].detach(),
+                #         f_s[:, self.identity_dim:]
+                #     ], dim=1)
+                # else:
+                #     f_w_repulse = f_w
+                #     f_s_repulse = f_s
 
                 # compute weights
                 with torch.no_grad():
@@ -132,18 +172,31 @@ class BAUTrainer(object):
                 alpha_value = self._get_alpha_value()
 
                 loss_tri = self.criterion_tri(emb_w, pids, alpha=alpha_value) if self.use_triplet else torch.tensor(0.0).cuda()
-                
-                loss_align = self.align_loss(f_w, f_s, pids, weight, alpha_value) if self.use_align else torch.tensor(0.0).cuda()
+
+                loss_align = self.align_loss(f_w_align, f_s_align, pids, weight, alpha_value) if self.use_align else torch.tensor(0.0).cuda()
+                loss_drift_align = torch.tensor(0.0).cuda()
+
+                if self.use_drift_align:
+                    if f_w_drift is None or f_s_drift is None:
+                        raise ValueError("Drift features not found for drift alignment loss.")
+                    loss_drift_align = self.align_loss(f_w_drift, f_s_drift, pids, weight, alpha_value)
+
+                total_align = loss_align + loss_drift_align
                 
                 loss_uniform = 0.5*(self.uniform_loss(f_w, alpha_value) + self.uniform_loss(f_s, alpha_value)) if self.use_uniform else torch.tensor(0.0).cuda()
                 
                 loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids, alpha_value) +
                                    self.domain_loss(f_s, self.memory_bank.features, dids, alpha_value)) if self.use_domain else torch.tensor(0.0).cuda()
 
+                if self.use_omega_reg and f_w_drift is not None and f_s_drift is not None:
+                    loss_omega = self.omega_reg_weight * 0.5 * (self.omega_loss(f_w_drift) + self.omega_loss(f_s_drift))
+                else:
+                    loss_omega = torch.tensor(0.0, device=f.device)
+
                 with torch.no_grad():
                     self.memory_bank.momentum_update(f_w, pids)
                     
-                loss = loss_ce + loss_tri + self.lam * loss_align + loss_uniform + loss_domain
+                loss = loss_ce + loss_tri + self.lam * total_align + loss_uniform + loss_domain + loss_omega
 
             if torch.isnan(loss):  # early exit if instability appears
                 msg = f"NaN loss detected at epoch {epoch}, iter {i}"
@@ -152,6 +205,14 @@ class BAUTrainer(object):
 
             # update
             self.scaler.scale(loss).backward()
+            # Unscale before clipping so grad norms are in true scale
+            self.scaler.unscale_(optimizer)
+            # Clip drift head gradients to prevent magnitude explosion
+            if self.identity_dim is not None:
+                module = getattr(self.model, 'module', self.model)
+                drift_head = getattr(module, 'drift_head', None)
+                if drift_head is not None:
+                    torch.nn.utils.clip_grad_norm_(drift_head.parameters(), max_norm=1.0)
             self.scaler.step(optimizer)
             self.scaler.update()
             # loss.backward()
@@ -162,8 +223,10 @@ class BAUTrainer(object):
             losses_ce.update(loss_ce.item())
             losses_tri.update(loss_tri.item())
             losses_align.update(loss_align.item())
+            losses_drift_align.update(loss_drift_align.item())
             losses_uniform.update(loss_uniform.item())
             losses_domain.update(loss_domain.item())
+            losses_omega.update(loss_omega.item())
             precisions.update(prec[0])
 
             batch_time.update(time.time() - end)
@@ -179,9 +242,11 @@ class BAUTrainer(object):
                         'train/loss_ce': losses_ce.val,
                         'train/loss_tri': losses_tri.val,
                         'train/loss_align': losses_align.val,
+                        'train/loss_drift_align': losses_drift_align.val,
                         'train/loss_uniform': losses_uniform.val,
                         'train/loss_domain': losses_domain.val,
-                        'train/loss_total': (losses_ce.val + losses_tri.val + self.lam * losses_align.val + losses_uniform.val + losses_domain.val),
+                        'train/loss_omega': losses_omega.val,
+                        'train/loss_total': (losses_ce.val + losses_tri.val + self.lam * losses_align.val + losses_uniform.val + losses_domain.val + losses_omega.val),
                         'train/precision': precisions.val / 100.0 if precisions.val > 1 else precisions.val,  # ensure fraction
                         'time/batch_sec': batch_time.val,
                         'lr': current_lr,
@@ -201,6 +266,7 @@ class BAUTrainer(object):
                       f' L_Tri: {losses_tri.val:.3f} ({losses_tri.avg:.3f})  '
                       f' L_Align: {losses_align.val:.3f} ({losses_align.avg:.3f})  '
                       f' L_Uniform: {losses_uniform.val:.3f} ({losses_uniform.avg:.3f})  '
+                      f' L_Omega: {losses_omega.val:.3f} ({losses_omega.avg:.3f})  '
                       f' L_Domain: {losses_domain.val:.3f} ({losses_domain.avg:.3f})  '
                       f' Prec: {precisions.val:.2%} ({precisions.avg:.2%})')
                 torch.cuda.empty_cache()
@@ -211,14 +277,17 @@ class BAUTrainer(object):
     
     def align_loss(self, f_w, f_s, y, w, alpha=None):
 
-        # Disable algin loss because it has opposing gradients with triplet/CE loss at the moment
+        # For Finsler models, alignment loss operates ONLY on the identity part.
+        # The drift vector models domain shift, not augmentation shift —
+        # forcing alignment on drift creates conflicting gradients with
+        # triplet/domain/uniform losses that rely on the asymmetric drift.
         # effective_dist_func = self.dist_func
-        # if effective_dist_func is finsler_drift_dist and f_w.size(1) == 2048:
-        #     effective_dist_func = euclidean_dist
+        effective_dist_func = euclidean_dist
+        alpha = None  # alpha is meaningless on identity-only features
 
         # Case 2: Finsler spaces and Euclidean Manifold
         if self.manifold is None:
-            dist_squared = euclidean_dist(f_s, f_w, alpha=None).pow(2)
+            dist_squared = effective_dist_func(f_s, f_w, alpha=alpha).pow(2)
 
         # Case 3: Non-euclidean manifold
         elif self.manifold is not None:
@@ -228,7 +297,7 @@ class BAUTrainer(object):
                 f_w.unsqueeze(0),
                 dim=-1,
             ).pow(2)
-        
+    
         else:
             raise ValueError("Invalid manifold/alpha configuration for align loss.")
 
@@ -240,7 +309,9 @@ class BAUTrainer(object):
     def uniform_loss(self, f, alpha=None):
         
         effective_dist_func = self.dist_func
-        if effective_dist_func is finsler_drift_dist and f.size(1) == 2048:
+        # For Finsler models with concatenated [identity|drift], use the full
+        # embedding so the asymmetric drift contributes to the repulsion signal.
+        if self.identity_dim is not None and effective_dist_func is finsler_drift_dist and f.size(1) <= self.identity_dim:
             effective_dist_func = euclidean_dist
 
         # Case 2: Finsler spaces and Euclidean Manifold
@@ -279,7 +350,9 @@ class BAUTrainer(object):
         m, n = f.size(0), c.size(0)
         
         effective_dist_func = self.dist_func
-        if effective_dist_func is finsler_drift_dist and f.size(1) == 2048:
+        # For Finsler models with concatenated [identity|drift], use the full
+        # embedding so the asymmetric drift contributes to the domain repulsion.
+        if self.identity_dim is not None and effective_dist_func is finsler_drift_dist and f.size(1) <= self.identity_dim:
             effective_dist_func = euclidean_dist
 
         # Case 2: Finsler spaces and Euclidean Manifold
@@ -322,3 +395,34 @@ class BAUTrainer(object):
 
         sorted_dist = sorted_dist[:, 1:m+1] # different class
         return sorted_dist.mul(-2).exp().mean().log()
+
+
+    def omega_loss(self, omega):
+        # Regularization on the omega drift vector to mitigate divergence to the maximum norm configured
+           
+        # If the finsler model was not selected -> skip omega regularization
+        if omega is None or omega.numel() == 0:
+            module = getattr(self.model, 'module', self.model)
+            device = next(module.parameters()).device
+            return torch.tensor(0.0, device=device)
+
+        module = getattr(self.model, 'module', self.model)
+        drift_head = getattr(module, 'drift_head', None)
+        if drift_head is None or not hasattr(drift_head, 'max_norm'):
+            return torch.tensor(0.0, device=omega.device)
+
+        norms = torch.norm(omega, p=2, dim=1, keepdim=True)
+
+        # Alternative 1: Log-Barrier Penalty
+        max_norm = float(drift_head.max_norm)
+        eps = 1e-6
+        slack = torch.clamp(max_norm - norms, min=eps)
+        loss = -torch.log(slack).mean()
+
+        # Alternative 2: Margin-based Hinge Penalty
+        # margin = 0.50
+        # return F.relu(norms - margin).mean()
+
+        # Alternative 3: Direct L2 Penalty
+        # return norms.pow(2).mean()
+        return loss

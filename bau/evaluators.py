@@ -11,7 +11,7 @@ from .evaluation_metrics import cmc, mean_ap
 from .utils.meters import AverageMeter
 from .utils.rerank import re_ranking
 from .utils import to_torch
-from .utils.visualisation import visualize_embeddings, visualize_hyperbolic_embeddings
+from .utils.visualisation import visualize_embeddings, visualize_hyperbolic_embeddings, visualize_retrieval
 import geoopt
 # from pykeops.torch import LazyTensor
 import wandb
@@ -210,7 +210,7 @@ def evaluate_all(query_features, gallery_features, distmat, visfig, query=None, 
 
 
 class Evaluator(object):
-    def __init__(self, model, alpha_module=None):
+    def __init__(self, model, alpha_module=None, seed=1):
         super(Evaluator, self).__init__()
         self.model = model
         module = getattr(model, 'module', model)
@@ -219,6 +219,7 @@ class Evaluator(object):
         self.dist_func = getattr(module, 'dist_func', euclidean_dist)
         self.select_eval_embedding = getattr(module, 'select_eval_embedding', None)
         self.use_drift_in_eval = getattr(module, 'use_drift_in_eval', True)
+        self.seed = seed  # for deterministic retrieval visualisation
 
     def _apply_eval_selector(self, features):
         """
@@ -272,23 +273,41 @@ class Evaluator(object):
                     np.ones(len(query_features), dtype=bool), 
                     np.zeros(len(gallery_features), dtype=bool)
                 ]),
-                k=None,
-                n=1000,
+                k=10,
+                n=50,
                 seed=42
             )
 
         results = evaluate_all(query_features, gallery_features, distmat, vis_fig, query=query, gallery=gallery, cmc_flag=cmc_flag, cmc_topk=cmc_topk)
 
         if (not rerank):
-            return results
+            # Generate qualitative retrieval visualisation (reuses distmat,
+            # so only the cost of loading ~6 images per row is added).
+            retrieval_fig = visualize_retrieval(
+                distmat.numpy() if torch.is_tensor(distmat) else distmat,
+                query, gallery, images_dir=None,
+                num_queries=4, top_k=5, seed=self.seed,
+            )
+            return results + (retrieval_fig,)
 
         if self.manifold is not None:
             print('Re-ranking is disabled for hyperbolic embeddings.')
-            return results
+            retrieval_fig = visualize_retrieval(
+                distmat.numpy() if torch.is_tensor(distmat) else distmat,
+                query, gallery, images_dir=None,
+                num_queries=4, top_k=5, seed=self.seed,
+            )
+            return results + (retrieval_fig,)
 
         print('Applying person re-ranking ...')
         distmat_qq, _, _ = pairwise_distance(features, query, query, manifold=self.manifold, alpha=alpha_value, dist_func=dist_func)
         distmat_gg, _, _ = pairwise_distance(features, gallery, gallery, manifold=self.manifold, alpha=alpha_value, dist_func=dist_func)
         distmat = re_ranking(distmat.cpu().numpy(), distmat_qq.cpu().numpy(), distmat_gg.cpu().numpy())
         
-        return evaluate_all(query_features, gallery_features, distmat, vis_fig, query=query, gallery=gallery, cmc_flag=cmc_flag, cmc_topk=cmc_topk)
+        results = evaluate_all(query_features, gallery_features, distmat, vis_fig, query=query, gallery=gallery, cmc_flag=cmc_flag, cmc_topk=cmc_topk)
+        retrieval_fig = visualize_retrieval(
+            distmat if isinstance(distmat, np.ndarray) else distmat.numpy(),
+            query, gallery, images_dir=None,
+            num_queries=4, top_k=5, seed=self.seed,
+        )
+        return results + (retrieval_fig,)

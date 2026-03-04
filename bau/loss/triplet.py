@@ -94,37 +94,109 @@ def euclidean_dist(x: torch.Tensor, y: torch.Tensor, alpha=None) -> torch.Tensor
 	return dist
 
 
-def finsler_drift_dist(x: torch.Tensor, y: torch.Tensor, alpha=None) -> torch.Tensor:
+def finsler_drift_dist(
+	x: torch.Tensor,
+	y: torch.Tensor,
+	alpha=None,
+	identity_dim: int | None = None,
+) -> torch.Tensor:
 	"""
 	Compute Randers/Finsler distance using concatenated [identity | drift] embeddings.
+
+	If identity_dim is provided, it defines the split point between identity and drift.
+	Otherwise, the feature dimension is split evenly.
 	"""
-	# Sanity Checks -- only supports ResNet50-based 4096-dim embeddings
 	if x.size(1) != y.size(1):
 		raise ValueError("finsler_drift_dist requires x and y to have the same feature dimension")
-	if x.size(1) == 2048:
-		raise ValueError(
-			"finsler_drift_dist expects concatenated [identity|drift] embeddings; "
-			"got 2048-d identity-only features. Use full embeddings (e.g., 4096-d)."
-		)
-	if x.size(1) % 2 != 0:
-		raise ValueError("finsler_drift_dist requires an even feature dimension")
-	
+
+	feature_dim = x.size(1)
+	if identity_dim is None:
+		if feature_dim % 2 != 0:
+			raise ValueError("finsler_drift_dist requires an even feature dimension when identity_dim is None")
+		identity_dim = feature_dim // 2
+	if identity_dim <= 0 or identity_dim >= feature_dim:
+		raise ValueError("identity_dim must be in (0, feature_dim) for finsler_drift_dist")
 
 	m, n = x.size(0), y.size(0)
-	feat_dim = x.size(1) // 2
-	identity_x = x[:, :feat_dim]
-	drift_x = x[:, feat_dim:]
-	identity_y = y[:, :feat_dim]
-
+	identity_x = x[:, :identity_dim]
+	drift_x = x[:, identity_dim:]
+	identity_y = y[:, :identity_dim]
+	drift_y = y[:, identity_dim:]
+	if drift_x.size(1) != drift_y.size(1):
+		raise ValueError("Drift components of x and y must have the same dimension")
+ 
 	xx = torch.pow(identity_x, 2).sum(1, keepdim=True).expand(m, n)
 	yy = torch.pow(identity_y, 2).sum(1, keepdim=True).expand(n, m).t()
 	dist = xx + yy
 	dist = dist - 2 * identity_x @ identity_y.t()
 	dist = dist.clamp(min=1e-12).sqrt()
 
-	term_a = torch.mm(drift_x, identity_y.t())
-	term_b = (drift_x * identity_x).sum(dim=1, keepdim=True).expand(m, n)
-	asymmetry = term_a - term_b
+	shared_dim = min(drift_x.size(1), identity_x.size(1))
+	if shared_dim <= 0:
+		raise ValueError("finsler_drift_dist requires a non-zero drift component")
+	drift_x_shared = drift_x[:, :shared_dim]
+	drift_y_shared = drift_y[:, :shared_dim]
+	
+	identity_x_shared = identity_x[:, :shared_dim]
+	identity_y_shared = identity_y[:, :shared_dim]
+
+	# Option 1: Assume drift vector constant along trajectory
+	#Note: This distance function discards the rest of the dimensions that aren't shared
+	# term_a = torch.mm(drift_x_shared, identity_y_shared.t())
+	# term_b = (drift_x_shared * identity_x_shared).sum(dim=1, keepdim=True).expand(m, n)
+	# asymmetry = term_a - term_b
+
+	# Option 2: Symmetric Trapezoidal Approximation
+	# 1. x_w * y_id (MxN)
+	term_xy = torch.mm(drift_x_shared, identity_y_shared.t())
+
+	# 2. x_w * x_id (Mx1 -> MxN)
+	term_xx = (drift_x_shared * identity_x_shared).sum(dim=1, keepdim=True).expand(m, n)
+
+	# 3. y_w * y_id (Nx1 -> NxM -> MxN via transpose)
+	term_yy = (drift_y_shared * identity_y_shared).sum(dim=1, keepdim=True).expand(n, m).t()
+
+	# 4. y_w * x_id (NxM -> MxN via transpose of the matmul result)
+	# Note: (y_w @ x_id.T).T is equivalent to x_id @ y_w.T
+	term_yx = torch.mm(identity_x_shared, drift_y_shared.t())
+
+	asymmetry = 0.5 * ((term_xy - term_xx) + (term_yy - term_yx))
+
+	# Option 3: Spherical Trapezoidal Approximation (Geodesic Path)
+	# Removes the Euclidean straight-line assumption. Since identity features are L2 normalized, 
+	# the path is a great circle arc. We project the path tangents onto the hypersphere.
+
+	# # 1. x_w * y_id (MxN)
+	# term_xy = torch.mm(drift_x_shared, identity_y_shared.t())
+
+	# # 2. x_w * x_id (Mx1 -> MxN)
+	# term_xx = (drift_x_shared * identity_x_shared).sum(dim=1, keepdim=True).expand(m, n)
+
+	# # 3. y_w * y_id (Nx1 -> NxM -> MxN via transpose)
+	# term_yy = (drift_y_shared * identity_y_shared).sum(dim=1, keepdim=True).expand(n, m).t()
+
+	# # 4. y_w * x_id (NxM -> MxN via transpose of the matmul result)
+	# # Note: (y_w @ x_id.T).T is equivalent to x_id @ y_w.T
+	# term_yx = torch.mm(identity_x_shared, drift_y_shared.t())
+	
+	# cos_sim = torch.mm(identity_x_shared, identity_y_shared.t())
+
+	# # Tangent at x pointing to y: y - cos(theta)*x
+	# # Tangent at y coming from x: y*cos(theta) - x
+	# asymmetry = 0.5 * ((term_xy - cos_sim * term_xx) + (cos_sim * term_yy - term_yx))
+
+	# --- PROPOSED SCALING TEST ---   
+    # Uncomment ONE of the following scaling methods to test:
+    # # 1. The N/S Test (Thomas's suggestion to prove the artifact)
+	scaling_factor = identity_x.size(1) / shared_dim 
+    
+    # # 2. Dimension-Invariant Normalization (To fairly compare dimensions)
+	# # import math
+	# # scaling_factor = 1.0 / math.sqrt(shared_dim) 
+	
+	asymmetry = asymmetry * scaling_factor
+	# -----------------------------
+
 	return dist + asymmetry
 
 
@@ -167,7 +239,7 @@ class TripletLoss(nn.Module):
 	Details can be seen in 'In defense of the Triplet Loss for Person Re-Identification'
 	'''
 
-	def __init__(self, margin=None, normalize_feature=False, manifold=None, alpha=None, dist_func=euclidean_dist):
+	def __init__(self, margin=None, normalize_feature=False, manifold=None, alpha=None, dist_func=euclidean_dist, bidirectional=False):
 		"""
 		Docstring for __init__
 		
@@ -182,6 +254,7 @@ class TripletLoss(nn.Module):
 		self.manifold = manifold
 		self.alpha = alpha
 		self.dist_func = dist_func
+		self.bidirectional = bidirectional
 		if margin is not None:
 			self.margin_loss = nn.MarginRankingLoss(margin=float(margin)).cuda()
 		else:
@@ -189,6 +262,10 @@ class TripletLoss(nn.Module):
 
 	def forward(self, emb, label, alpha=None):
 		"""
+		
+		emb: (N, D) embedding features
+		label: (N,) labels corresponding to the embeddings
+		
 		Note that we define the input argument alpha here as the override value for Rander's alpha.
 		Intended to be used by the trainer each step, which is passed into forward() during training.
 
@@ -229,6 +306,18 @@ class TripletLoss(nn.Module):
 			loss = self.margin_loss(dist_an, dist_ap, y)
 		else:
 			loss = self.margin_loss(dist_an - dist_ap, y)
+
+		if self.bidirectional:
+			dist_ap_inv, dist_an_inv = cast(
+				Tuple[torch.Tensor, torch.Tensor],
+				_batch_hard(mat_dist.t(), mat_sim.t()),
+			)
+			assert dist_an_inv.size(0)==dist_ap_inv.size(0)
+			if self.margin is not None:
+				loss_inv = self.margin_loss(dist_an_inv, dist_ap_inv, y)
+			else:
+				loss_inv = self.margin_loss(dist_an_inv - dist_ap_inv, y)
+			loss = 0.5 * (loss + loss_inv)
 		# prec = (dist_an.data > dist_ap.data).sum() * 1. / y.size(0)
 		return loss # , prec
 

@@ -141,12 +141,15 @@ def get_test_loader(dataset, height, width, batch_size, workers, testset=None):
 
 def create_model(args, num_classes, manifold):
     if args.arch == "resnet50_finsler":
+        if args.drift_dim <= 0:
+            raise ValueError("--drift-dim must be a positive integer")
         model = models.create(
             args.arch,
             num_classes=num_classes,
             manifold=manifold,
             use_drift_in_eval=args.eval_drift,
             memory_bank_mode=args.memory_bank_mode,
+            drift_dim=args.drift_dim,
         )
     else:
         model = models.create(args.arch, num_classes=num_classes, manifold=manifold)
@@ -337,7 +340,15 @@ def main_worker(args):
     device = bank_features.device
 
     log("Extracting initial features for memory bank", level=1)
-    features, _ = extract_features(model, memory_loader, print_freq=50)
+    model_impl = getattr(model, 'module', model)
+    original_eval_drift = getattr(model_impl, 'use_drift_in_eval', None)
+    if original_eval_drift is not None:
+        model_impl.use_drift_in_eval = True
+    try:
+        features, _ = extract_features(model, memory_loader, print_freq=50)
+    finally:
+        if original_eval_drift is not None:
+            model_impl.use_drift_in_eval = original_eval_drift
     log("Finished feature extraction", level=1)
     features_dict = collections.defaultdict(list)
     for f, pid, _, _ in sorted(train_dataset.train):
@@ -380,15 +391,29 @@ def main_worker(args):
     log("Freed temporary dataset references", level=2)
 
     # evaluator
-    evaluator = Evaluator(model, alpha_module=alpha_module)
+    evaluator = Evaluator(model, alpha_module=alpha_module, seed=args.seed)
     log("Initialized evaluator", level=2)
 
     # optimizer
+    # Separate drift head parameters for reduced LR to prevent the drift
+    # shortcut (drift head overfitting to satisfy repulsion losses without
+    # improving identity discrimination).
     params = []
+    drift_params = []
+    backbone_params = []
     for key, value in model.named_parameters():
         if not value.requires_grad:
             continue
-        params += [{"params": [value], "lr": args.lr, "weight_decay": args.weight_decay}]
+        if 'drift_head' in key:
+            drift_params.append(value)
+        else:
+            backbone_params.append(value)
+    
+    params += [{"params": backbone_params, "lr": args.lr, "weight_decay": args.weight_decay}]
+    if drift_params:
+        drift_lr = args.lr * args.drift_lr_mult
+        params += [{"params": drift_params, "lr": drift_lr, "weight_decay": args.weight_decay}]
+        log(f"Drift head LR: {drift_lr:.6f} (mult={args.drift_lr_mult})", level=1)
     if alpha_module is not None:
         alpha_lr_mult = 100.0
         params += [{"params": alpha_module.parameters(), "lr": args.lr * alpha_lr_mult, "weight_decay": 0.0}]
@@ -416,12 +441,16 @@ def main_worker(args):
                          manifold_chunk_size=args.manifold_chunk_size,
                          use_aug_ce=args.use_aug_ce,
                          use_align=not args.no_align,
+                         use_drift_align=args.use_drift_align,
                          use_uniform=not args.no_uniform,
                          use_domain=not args.no_domain, 
                          use_triplet=not args.no_triplet,
                          use_ce=not args.no_ce,
                          alpha=alpha_init,
-                         alpha_module=alpha_module)
+                         alpha_module=alpha_module,
+                         bidirectional_triplet=args.bidirectional_triplet,
+                         use_omega_reg=args.use_omega_reg,
+                         omega_reg_weight=args.omega_reg_weight)
     
     log("Trainer constructed", level=2)
 
@@ -455,9 +484,11 @@ def main_worker(args):
                 if isinstance(eval_outputs, tuple):
                     mAP = float(eval_outputs[0])
                     visfig = eval_outputs[1]
+                    retrieval_fig = eval_outputs[2] if len(eval_outputs) > 2 else None
                 else:
                     mAP = float(eval_outputs)
                     visfig = None
+                    retrieval_fig = None
                 vis_path = None
                 if visfig is not None:
                     fig = getattr(visfig, 'figure', None)
@@ -465,12 +496,19 @@ def main_worker(args):
                         vis_path = osp.join(args.logs_dir, 'vis_epoch_{:03d}.png'.format(epoch))
                         fig.savefig(vis_path, bbox_inches='tight')
                         plt.close(fig)
+                retrieval_path = None
+                if retrieval_fig is not None:
+                    retrieval_path = osp.join(args.logs_dir, 'retrieval_epoch_{:03d}.png'.format(epoch))
+                    retrieval_fig.savefig(retrieval_path, dpi=150, bbox_inches='tight')
+                    plt.close(retrieval_fig)
                 if wandb is not None and getattr(wandb, "run", None) is not None:
                     # log epoch-level aggregates
                     try:
                         log_dict = {'eval/mAP': mAP, 'epoch': epoch}
                         if vis_path is not None:
                             log_dict['eval/embedding_vis'] = wandb.Image(vis_path, caption='Latent Embeddings Epoch {:d}'.format(epoch))
+                        if retrieval_path is not None:
+                            log_dict['eval/retrieval'] = wandb.Image(retrieval_path, caption='Top-5 Retrieval Epoch {:d}'.format(epoch))
                         wandb.log(log_dict)
                     except Exception:
                         pass
@@ -508,9 +546,13 @@ def main_worker(args):
             cmc_scores = None
             final_mAP = None
             final_visfig = None
+            final_retrieval_fig = None
 
             if isinstance(final_results, tuple):
-                if len(final_results) >= 3:
+                # cmc_flag=True returns (cmc_scores, mAP, visfig, retrieval_fig)
+                if len(final_results) >= 4:
+                    cmc_scores, final_mAP, final_visfig, final_retrieval_fig = final_results[0], final_results[1], final_results[2], final_results[3]
+                elif len(final_results) >= 3:
                     cmc_scores, final_mAP, final_visfig = final_results[0], final_results[1], final_results[2]
                 elif len(final_results) == 2:
                     final_mAP, final_visfig = final_results
@@ -530,6 +572,11 @@ def main_worker(args):
                     final_fig.savefig(final_vis_path, bbox_inches='tight')
                     plt.close(final_fig)
                     log_dict['final/embedding_vis'] = wandb.Image(final_vis_path, caption='Best Model Embedding')
+            if final_retrieval_fig is not None:
+                final_retrieval_path = osp.join(args.logs_dir, 'retrieval_final.png')
+                final_retrieval_fig.savefig(final_retrieval_path, dpi=150, bbox_inches='tight')
+                plt.close(final_retrieval_fig)
+                log_dict['final/retrieval'] = wandb.Image(final_retrieval_path, caption='Best Model Top-5 Retrieval')
 
             if log_dict:
                 wandb.log(log_dict)
@@ -580,14 +627,23 @@ if __name__ == '__main__':
     parser.add_argument('--iters', type=int, default=500, help='iteration for each epoch')
     parser.add_argument('--warmup-step', type=int, default=10)
     parser.add_argument('--milestones', nargs='+', type=int, default=[30, 50], help='milestones for the learning rate decay')
+    parser.add_argument('--drift-lr-mult', type=float, default=0.05,
+                        help='learning rate multiplier for drift head parameters (resnet50_finsler only, default: 0.1)')
 
     # ablation
     parser.add_argument('--use-aug-ce', action='store_true', help='use cross entropy loss on strongly augmented images')
     parser.add_argument('--no-align', action='store_true', help='disable alignment loss')
+    parser.add_argument('--use-drift-align', action='store_true', help='enable drift alignment loss (resnet50_finsler only)')
     parser.add_argument('--no-uniform', action='store_true', help='disable uniformity loss')
     parser.add_argument('--no-domain', action='store_true', help='disable domain loss')
     parser.add_argument('--no-triplet', action='store_true', help='disable triplet loss')
     parser.add_argument('--no-ce', action='store_true', help='disable cross-entropy loss')
+    parser.add_argument('--bidirectional-triplet', action='store_true',
+                        help='enable bidirectional (inverse) triplet loss')
+    parser.add_argument('--use-omega-reg', action='store_true',
+                        help='enable omega drift norm regularization (resnet50_finsler only)')
+    parser.add_argument('--omega-reg-weight', type=float, default=1.0,
+                        help='weight multiplier for omega regularization loss')
     
     # manifold-aware
     parser.add_argument('--manifold-aware', type=lambda x: x.lower() == 'true', default=False, help='use manifold-aware distance computations (poincare ball)') 
@@ -604,6 +660,8 @@ if __name__ == '__main__':
                         help='use drift branch in evaluation ranking (resnet50_finsler only)')
     parser.add_argument('--memory-bank-mode', type=str, default='full', choices=['full', 'identity'],
                         help='memory bank embedding mode for resnet50_finsler')
+    parser.add_argument('--drift-dim', type=int, default=2048,
+                        help='drift branch embedding dimension (resnet50_finsler only)')
     
     # fine-tuning
     parser.add_argument('--fine-tuning', type=lambda x: x.lower() == 'true', default=False, help='fine-tune the model')

@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=bau-finsler                # Job name
-#SBATCH --gres=gpu:1,VRAM:36G                 # Request one 28GB-class GPU (reduce OOM risk)
+#SBATCH --gres=gpu:1,VRAM:25G                 # Request one 25GB-class GPU (reduce OOM risk)
 #SBATCH --nodes=1                             # Run all processes on a single node
 #SBATCH --cpus-per-task=5                     # Number of CPU cores per task
-#SBATCH --mem=24G                             # Total memory for the entire job
-#SBATCH --time=12:00:00                       # Time limit hrs:min:sec per task
+#SBATCH --mem=12G                             # Total memory for the entire job
+#SBATCH --time=15:00:00                       # Time limit hrs:min:sec per task
 #SBATCH --exclude=node7,node9,node1,node13    # Exclude problematic nodes
 # #SBATCH --constraint="GPU_MODEL:a40"          # Ensure specific GPU model if available
-#SBATCH --output=logs/fins_learnableOmega/finsler-%j.out          # Standard output log
-#SBATCH --error=logs/fins_learnableOmega/finsler-%j.err           # Error log
+#SBATCH --output=logs/AGReIDv2_sweep/finsler-%j.out          # Standard output log
+#SBATCH --error=logs/AGReIDv2_sweep/finsler-%j.err           # Error log
 
 set -euo pipefail
 
@@ -20,17 +20,23 @@ conda activate BAU
 export PYTHONPATH=/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification
 
 # Base hyper-parameters (shared across jobs)
-ARCH=resnet50_finsler            # Default
+ARCH=resnet50_finsler           # Changed to learnableOmega model
 BATCH_SIZE=256                  # Default
 LAM=1.5                         # Default
 KNN=10                          # Default
 ITERS=500                       # Default
-WARMUP_STEP=10                  # Default
-EPOCHS=60                       # Default
+EPOCHS=60                       # Reduced from 60 to 20 for faster iteration and to fit within time limits
+# WARMUP_STEP=3                   # Proportionally scale warmup steps to 20 epochs (originally 10 for 60 epochs)
+# MILESTONES="10 15"              # Proportionally scale milestones to 20 epochs (originally 30 and 50 for 60 epochs)
+OMEGA_REG_WEIGHT=5.0            # New hyper-parameter for omega regularization weight
 
-LOGS_DIR="$(pwd)/logs/learnableOmega/job_${SLURM_JOB_ID}"
-WANDB_NAME="learnableOmega_euclideanAlign_cuhk03"
-echo "Starting finsler experimentation | Learnable omega"
+
+# Run Specific
+RUN_NAME="FHSigGate+ModFinsDist_BidirectTri_OmegaReg${OMEGA_REG_WEIGHT}"
+
+LOGS_DIR="$(pwd)/logs/AGReIDv2_sweep/job_${SLURM_JOB_ID}_dt_aerial_to_cctv_${RUN_NAME}"
+WANDB_NAME="AGReIDv2_learnableOmega_dt_aerial_to_cctv_${RUN_NAME}"
+echo "Starting finsler single experimentation"
 echo "Logs dir: ${LOGS_DIR}"
 
 mkdir -p "${LOGS_DIR}"
@@ -47,16 +53,23 @@ export PYTHONPATH="${SNAP_DIR}"
 
 srun --unbuffered python "${SNAP_DIR}/examples/train_bau.py" \
   -a "${ARCH}" \
-  -ds market1501 msmt17 cuhksysu \
-  -dt cuhk03 \
+  -ds agreidv2_aerial agreidv2_wearable agreidv2_cctv \
+  -dt agreidv2_aerial_to_cctv \
   -b "${BATCH_SIZE}" \
   --lam "${LAM}" --k "${KNN}" --iters "${ITERS}" \
   --epochs "${EPOCHS}" \
   --eval-epochs 5 10 15 20 25 30 35 40 45 50 55 59 \
-  --warmup-step "${WARMUP_STEP}" \
   --logs-dir "${LOGS_DIR}" \
   --wandb-name "${WANDB_NAME}" \
   --verbosity 2 \
-  --eval-drift true \
-  --memory-bank-mode full 
-
+  --eval-drift false \
+  --memory-bank-mode full \
+  --bidirectional-triplet \
+  --use-omega-reg \
+  --omega-reg-weight "${OMEGA_REG_WEIGHT}" \
+  # --use-drift-align \
+  # --drift-dim 32 \
+  # --warmup-step "${WARMUP_STEP}" \
+  # --milestones ${MILESTONES} \
+  # -ds market1501 msmt17 cuhksysu \
+  # -dt cuhk03 \

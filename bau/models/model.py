@@ -6,6 +6,7 @@ from torch.nn import init
 import torchvision
 import torch
 import geoopt
+from functools import partial
 
 from ..loss.triplet import euclidean_dist, finsler_drift_dist
 
@@ -125,19 +126,43 @@ class FinslerDriftHead(nn.Module):
         super(FinslerDriftHead, self).__init__()
         hidden_dim = max(1, input_dim // 2)
         self.max_norm = max_norm
+        # Bias set to False to ensure f(0) = 0
         self.block = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.BatchNorm1d(hidden_dim),
+            nn.Linear(input_dim, hidden_dim, bias=False),
+            # nn.BatchNorm1d(hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim),
+            nn.Linear(hidden_dim, output_dim, bias=False),
         )
+
+        # Initialize last layer to near-zero
+        init.normal_(self.block[-1].weight, std=0.001)
+        # init.constant_(self.block[-1].bias, 0)    # No bias to initialize
 
     def forward(self, x):
         drift = self.block(x)
-        # drift = torch.tanh(drift)
+
+        # Calculate the Euclidean norm
         norms = torch.norm(drift, p=2, dim=1, keepdim=True)
-        scaled = torch.clamp(norms, max=self.max_norm)
-        drift = drift * (scaled / (norms + 1e-6))
+
+        # Option 1: Simple Norm Clipping + Scaling
+        # scaled = torch.clamp(norms, max=self.max_norm)
+        # drift = drift * (scaled / (norms + 1e-6))
+
+        # Option 2: Soft Tanh-Scaling
+        # scale = self.max_norm * torch.tanh(norms / self.max_norm) / (norms + 1e-6)
+        # drift = drift * scale
+        
+        # Option 3: Sigmoid Gated Scaling
+        scaling_factor = torch.sigmoid(norms)     # Smoothly scales from 0 to 1 as norm increases
+        unit_drift = drift / (norms + 1e-6)
+        drift = unit_drift * (scaling_factor * self.max_norm)
+
+        # Option 4: Log-Barrier / Soft-Maximum
+        # beta = 5.0      # Sharpness of the transition
+        # max_norm_t = torch.tensor(self.max_norm, device=norms.device)
+        # smooth_norm = - (1/beta) * torch.logaddexp(-beta * norms, -beta * max_norm_t)
+        # drift = drift * (smooth_norm / (norms + 1e-6))
+    
         return drift
 
 
@@ -145,13 +170,25 @@ class resnet50_finsler(nn.Module):
     """
     ResNet50 with a learned drift vector branch for Finsler/Randers distance.
     """
-    def __init__(self, num_classes=0, pretrained=True, manifold=None, use_drift_in_eval=True, memory_bank_mode="full"):
+    def __init__(
+        self,
+        num_classes=0,
+        pretrained=True,
+        manifold=None,
+        use_drift_in_eval=True,
+        memory_bank_mode="full",
+        drift_dim=2048,
+    ):
         super(resnet50_finsler, self).__init__()
         self.num_classes = num_classes
         self.manifold = manifold
-        self.dist_func = finsler_drift_dist
         self.identity_dim = 2048
-        self.drift_dim = 2048
+        self.dist_func = partial(finsler_drift_dist, identity_dim=self.identity_dim)
+        if drift_dim is None:
+            drift_dim = self.identity_dim
+        if int(drift_dim) <= 0:
+            raise ValueError("drift_dim must be a positive integer")
+        self.drift_dim = int(drift_dim)
         self.embedding_dim = self.identity_dim + self.drift_dim
         self.use_drift_in_eval = bool(use_drift_in_eval)
         self.supports_manifold = False
