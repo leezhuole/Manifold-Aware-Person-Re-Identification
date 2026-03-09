@@ -3,7 +3,7 @@
 #SBATCH --gres=gpu:1,VRAM:36G                 # Request one 36GB-class GPU (reduce OOM risk)
 #SBATCH --nodes=1                             # Run all processes on a single node
 #SBATCH --cpus-per-task=5                     # Number of CPU cores per task
-#SBATCH --mem=24G                             # Total memory for the entire job
+#SBATCH --mem=36G                             # Total memory for the entire job
 #SBATCH --time=15:00:00                       # Time limit hrs:min:sec per task
 #SBATCH --exclude=node7,node9,node1,node13    # Exclude problematic nodes
 # #SBATCH --constraint="GPU_MODEL:a40"          # Ensure specific GPU model if available
@@ -24,7 +24,7 @@ ARCH=resnet50_finsler           # Changed to learnableOmega model
 BATCH_SIZE=256                  # Default
 LAM=1.5                         # Default
 KNN=10                          # Default
-ITERS=500                       # Default
+ITERS=200                       # Default
 EPOCHS=60                       # Reduced from 60 to 20 for faster iteration and to fit within time limits
 # WARMUP_STEP=3                   # Proportionally scale warmup steps to 20 epochs (originally 10 for 60 epochs)
 # MILESTONES="10 15"              # Proportionally scale milestones to 20 epochs (originally 30 and 50 for 60 epochs)

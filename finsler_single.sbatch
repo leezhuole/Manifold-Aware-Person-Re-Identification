@@ -3,7 +3,7 @@
 #SBATCH --gres=gpu:1,VRAM:25G                 # Request one 25GB-class GPU (reduce OOM risk)
 #SBATCH --nodes=1                             # Run all processes on a single node
 #SBATCH --cpus-per-task=5                     # Number of CPU cores per task
-#SBATCH --mem=24G                             # Total memory for the entire job
+#SBATCH --mem=36G                             # Total memory for the entire job
 #SBATCH --time=15:00:00                       # Time limit hrs:min:sec per task
 #SBATCH --exclude=node7,node9,node1,node13    # Exclude problematic nodes
 # #SBATCH --constraint="GPU_MODEL:a40"          # Ensure specific GPU model if available
@@ -24,12 +24,12 @@ ARCH=resnet50                   # Default
 BATCH_SIZE=256                  # Default
 LAM=1.5                         # Default
 KNN=10                          # Default
-ITERS=500                       # Default
+ITERS=200                       # Default
 EPOCHS=60                       # Increased from 20 to 60 for full training
 # WARMUP_STEP=10                   # Proportionally scale warmup steps to 60 epochs (originally 10 for 60 epochs)
 # MILESTONES="10 15"              # Proportionally scale milestones to 60 epochs (originally 30 and 50 for 60 epochs)
-SOURCE_DATASET="msmt17 cuhk03 cuhksysu"
-TARGET_DATASET=market1501
+SOURCE_DATASET="market1501 cuhk03 cuhksysu"
+TARGET_DATASET=msmt17
 
 # Run Specific
 RUN_NAME="EucBaseline"
