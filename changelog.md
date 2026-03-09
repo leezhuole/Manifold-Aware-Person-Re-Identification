@@ -1,5 +1,18 @@
 # Changelog
 
+## [2026-03-09 00:00:00 UTC] - Rewrote README to document the fork-specific contributions over BAU
+**Files Modified:** `README.md`
+**Functions Altered:** N/A (documentation update)
+
+### Problem Addressed
+The previous README described the project at a high level, but it did not meticulously distinguish which improvements over the original BAU repository were actually implemented in the current codebase. It also contained several documentation mismatches with active code, including outdated architecture naming, an incorrect evaluation flag, and an overstated description of gradient-isolated Finsler training.
+
+### Modification
+Rewrote `README.md` to explicitly compare this repository against the original BAU codebase and document the concrete implementation deltas that plausibly affect metrics: the `resnet50_finsler` backbone, `FinslerDriftHead`, `finsler_drift_dist`, `AlphaParameter`, AG-ReIDv2 view-filtered and cross-view protocol support, geometry-aware trainer/evaluator behavior, Finsler-aware memory bank settings, and the expanded CLI surface for ablations. The rewrite also adds conservative attribution language, implementation caveats, and corrected command/default examples that match the current code.
+
+### Expected Behavior
+The README now functions as an accurate contribution audit for the asymmetric BAU fork. Users should be able to identify which code-level changes distinguish this repository from old BAU, understand why those changes may influence mAP/Rank-based metrics, and avoid being misled by stale commands or unsupported claims when reproducing experiments.
+
 ## [2026-03-04 15:00:00 UTC] - Implement SLERP integration for Finsler drift distance
 **Files Modified:** `bau/loss/triplet.py`
 **Functions Altered:** `finsler_drift_dist`

@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=bau-finsler                # Job name
-#SBATCH --gres=gpu:1,VRAM:25G                 # Request one 25GB-class GPU (reduce OOM risk)
+#SBATCH --gres=gpu:1,VRAM:36G                 # Request one 36GB-class GPU (reduce OOM risk)
 #SBATCH --nodes=1                             # Run all processes on a single node
 #SBATCH --cpus-per-task=5                     # Number of CPU cores per task
-#SBATCH --mem=12G                             # Total memory for the entire job
+#SBATCH --mem=24G                             # Total memory for the entire job
 #SBATCH --time=15:00:00                       # Time limit hrs:min:sec per task
 #SBATCH --exclude=node7,node9,node1,node13    # Exclude problematic nodes
 # #SBATCH --constraint="GPU_MODEL:a40"          # Ensure specific GPU model if available
@@ -32,8 +32,8 @@ OMEGA_REG_WEIGHT=1.5            # New hyper-parameter for omega regularization w
 DRIFT_METHOD=symmetric_trapezoidal    # Method for calculating the finsler distance [constant_drift, symmetric_trapezoidal, slerp, analytical]
 # SOURCE_DATASET="market1501 cuhksysu cuhk03"
 # TARGET_DATASET=msmt17
-SOURCE_DATASET="msmt17 cuhk03 cuhksysu"
-TARGET_DATASET=market1501
+SOURCE_DATASET="market1501 cuhk03 cuhksysu"
+TARGET_DATASET=msmt17
 
 # Run Specific
 RUN_NAME="FHSigGate_Drift${DRIFT_METHOD}_BidirectTri__OmegaReg${OMEGA_REG_WEIGHT}_OrthoEnforced"
