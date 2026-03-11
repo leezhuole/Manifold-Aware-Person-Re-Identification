@@ -24,16 +24,16 @@ ARCH=resnet50_finsler           # Changed to learnableOmega model
 BATCH_SIZE=256                  # Default
 LAM=1.5                         # Default
 KNN=10                          # Default
-ITERS=200                       # Default
+ITERS=500                       # Default
 EPOCHS=60                       # Reduced from 60 to 20 for faster iteration and to fit within time limits
 # WARMUP_STEP=3                   # Proportionally scale warmup steps to 20 epochs (originally 10 for 60 epochs)
 # MILESTONES="10 15"              # Proportionally scale milestones to 20 epochs (originally 30 and 50 for 60 epochs)
 OMEGA_REG_WEIGHT=1.5            # New hyper-parameter for omega regularization weight
-DRIFT_METHOD=symmetric_trapezoidal    # Method for calculating the finsler distance [constant_drift, symmetric_trapezoidal, slerp, analytical]
+DRIFT_METHOD=analytical    # Method for calculating the finsler distance [constant_drift, symmetric_trapezoidal, slerp, analytical]
 # SOURCE_DATASET="market1501 cuhksysu cuhk03"
 # TARGET_DATASET=msmt17
-SOURCE_DATASET="market1501 cuhk03 cuhksysu"
-TARGET_DATASET=msmt17
+SOURCE_DATASET="market1501 msmt17 cuhksysu"
+TARGET_DATASET=cuhk03
 
 # Run Specific
 RUN_NAME="FHSigGate_Drift${DRIFT_METHOD}_BidirectTri__OmegaReg${OMEGA_REG_WEIGHT}_OrthoEnforced"
