@@ -25,7 +25,7 @@ class BAUTrainer(object):
     def __init__(self, model, memory_bank, num_classes, margin, lam=1.5, k=10, manifold=None, manifold_chunk_size=None,
                  use_aug_ce=False, use_align=True, use_drift_align=False, use_uniform=True, use_domain=True, use_triplet=True, 
                  use_ce=True, alpha=None, alpha_module=None, bidirectional_triplet=False,
-                 use_omega_reg=False, omega_reg_weight=1.0):
+                 use_omega_reg=False, omega_reg_weight=1.0, domain_token_loss_weight=0.0):
         
         """
         Note that static alpha is not used during training. It is only set as a default when no alpha_module is provided
@@ -39,6 +39,7 @@ class BAUTrainer(object):
         self.identity_dim = getattr(module, 'identity_dim', None)  # e.g. 2048 for resnet50_finsler
         
         self.criterion_ce = CrossEntropyLabelSmooth(num_classes=num_classes).cuda()
+        self.criterion_domain_token = nn.CrossEntropyLoss().cuda()
         static_alpha = None if alpha_module is not None else alpha
         self.criterion_tri = TripletLoss(
             margin=margin,
@@ -63,6 +64,7 @@ class BAUTrainer(object):
         self.use_ce = use_ce
         self.use_omega_reg = use_omega_reg
         self.omega_reg_weight = omega_reg_weight
+        self.domain_token_loss_weight = domain_token_loss_weight
 
         # Finsler space parameter
         self.alpha = alpha
@@ -83,6 +85,7 @@ class BAUTrainer(object):
         losses_drift_align = AverageMeter()
         losses_uniform = AverageMeter()
         losses_domain = AverageMeter()
+        losses_domain_token = AverageMeter()
         losses_omega = AverageMeter()
         precisions = AverageMeter()
 
@@ -92,13 +95,21 @@ class BAUTrainer(object):
             batch_data = train_loader.next()
             # inputs_w: Weakly augmented images
             # inputs_s: Strongly augmented images
-            inputs_w, inputs_s, pids,   dids = self._parse_data(batch_data)
+            inputs_w, inputs_s, pids, dids = self._parse_data(batch_data)
             
             optimizer.zero_grad()
             with autocast(device_type='cuda'):
                 # feedforward
                 inputs = torch.cat([inputs_w, inputs_s], dim=0)
-                emb, f, logits = self.model(inputs)
+                domain_ids = torch.cat([dids, dids], dim=0)
+                model_outputs = self.model(inputs, domain_ids=domain_ids)
+                domain_token_logits = None
+                if isinstance(model_outputs, tuple) and len(model_outputs) == 4:
+                    emb, f, logits, aux_outputs = model_outputs
+                    if isinstance(aux_outputs, dict):
+                        domain_token_logits = aux_outputs.get("domain_logits")
+                else:
+                    emb, f, logits = model_outputs
                 # f = F.normalize(f)        # already normalized in model
                 emb_w, emb_s = emb.chunk(2)
                 f_w, f_s = f.chunk(2)
@@ -193,10 +204,15 @@ class BAUTrainer(object):
                 else:
                     loss_omega = torch.tensor(0.0, device=f.device)
 
+                if domain_token_logits is not None and self.domain_token_loss_weight > 0.0:
+                    loss_domain_token = self.domain_token_loss_weight * self.criterion_domain_token(domain_token_logits, domain_ids)
+                else:
+                    loss_domain_token = torch.tensor(0.0, device=f.device)
+
                 with torch.no_grad():
                     self.memory_bank.momentum_update(f_w, pids)
                     
-                loss = loss_ce + loss_tri + self.lam * total_align + loss_uniform + loss_domain + loss_omega
+                loss = loss_ce + loss_tri + self.lam * total_align + loss_uniform + loss_domain + loss_omega + loss_domain_token
 
             if torch.isnan(loss):  # early exit if instability appears
                 msg = f"NaN loss detected at epoch {epoch}, iter {i}"
@@ -226,6 +242,7 @@ class BAUTrainer(object):
             losses_drift_align.update(loss_drift_align.item())
             losses_uniform.update(loss_uniform.item())
             losses_domain.update(loss_domain.item())
+            losses_domain_token.update(loss_domain_token.item())
             losses_omega.update(loss_omega.item())
             precisions.update(prec[0])
 
@@ -245,8 +262,9 @@ class BAUTrainer(object):
                         'train/loss_drift_align': losses_drift_align.val,
                         'train/loss_uniform': losses_uniform.val,
                         'train/loss_domain': losses_domain.val,
+                        'train/loss_domain_token': losses_domain_token.val,
                         'train/loss_omega': losses_omega.val,
-                        'train/loss_total': (losses_ce.val + losses_tri.val + self.lam * losses_align.val + losses_uniform.val + losses_domain.val + losses_omega.val),
+                        'train/loss_total': (losses_ce.val + losses_tri.val + self.lam * losses_align.val + losses_uniform.val + losses_domain.val + losses_domain_token.val + losses_omega.val),
                         'train/precision': precisions.val / 100.0 if precisions.val > 1 else precisions.val,  # ensure fraction
                         'time/batch_sec': batch_time.val,
                         'lr': current_lr,
@@ -266,6 +284,7 @@ class BAUTrainer(object):
                       f' L_Tri: {losses_tri.val:.3f} ({losses_tri.avg:.3f})  '
                       f' L_Align: {losses_align.val:.3f} ({losses_align.avg:.3f})  '
                       f' L_Uniform: {losses_uniform.val:.3f} ({losses_uniform.avg:.3f})  '
+                      f' L_DTok: {losses_domain_token.val:.3f} ({losses_domain_token.avg:.3f})  '
                       f' L_Omega: {losses_omega.val:.3f} ({losses_omega.avg:.3f})  '
                       f' L_Domain: {losses_domain.val:.3f} ({losses_domain.avg:.3f})  '
                       f' Prec: {precisions.val:.2%} ({precisions.avg:.2%})')

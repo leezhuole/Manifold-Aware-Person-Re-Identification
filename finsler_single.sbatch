@@ -24,15 +24,15 @@ ARCH=resnet50                   # Default
 BATCH_SIZE=256                  # Default
 LAM=1.5                         # Default
 KNN=10                          # Default
-ITERS=200                       # Default
+ITERS=500                       # Default
 EPOCHS=60                       # Increased from 20 to 60 for full training
 # WARMUP_STEP=10                   # Proportionally scale warmup steps to 60 epochs (originally 10 for 60 epochs)
 # MILESTONES="10 15"              # Proportionally scale milestones to 60 epochs (originally 30 and 50 for 60 epochs)
-SOURCE_DATASET="market1501 cuhk03 cuhksysu"
-TARGET_DATASET=msmt17
+SOURCE_DATASET="market1501 msmt17 cuhksysu"
+TARGET_DATASET=cuhk03
 
 # Run Specific
-RUN_NAME="EucBaseline"
+RUN_NAME="EucBaseline_MultiGallerySampler"
 
 # # Finsler alpha learnable configurations
 # ALPHA_INIT=0.0                 # Learnable alpha initial value
@@ -40,7 +40,7 @@ RUN_NAME="EucBaseline"
 # ALPHA_TEMP=1.0                 # Learnable alpha temperature
 
 LOGS_DIR="$(pwd)/logs/AGReIDv2_sweep/job_${SLURM_JOB_ID}_dt_${TARGET_DATASET}_${RUN_NAME}"
-WANDB_NAME="AGReIDv2_learnableOmega_dt_${TARGET_DATASET}_${RUN_NAME}"
+WANDB_NAME="learnableOmega_dt_${TARGET_DATASET}_${RUN_NAME}"
 echo "Starting finsler single experimentation"
 echo "Logs dir: ${LOGS_DIR}"e
 
@@ -64,6 +64,7 @@ srun --unbuffered python "${SNAP_DIR}/examples/train_bau.py" \
   -ds ${SOURCE_DATASET} \
   -dt "${TARGET_DATASET}" \
   -b "${BATCH_SIZE}" \
+  --sampler "RandomMultipleGallery" \
   --lam "${LAM}" --k "${KNN}" --iters "${ITERS}" \
   --epochs "${EPOCHS}" \
   --eval-epochs 5 10 15 20 25 30 35 40 45 50 55 59 \

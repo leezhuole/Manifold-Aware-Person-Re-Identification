@@ -95,6 +95,40 @@ def euclidean_dist(x: torch.Tensor, y: torch.Tensor, alpha=None) -> torch.Tensor
 	return dist
 
 
+def _angular_extrapolation_bound(dtype: torch.dtype) -> float:
+	if dtype in (torch.float16, torch.bfloat16):
+		return 1.0 - 1e-4
+	return 1.0 - 1e-5
+
+
+def _safe_acos_linear_extrapolation(x: torch.Tensor, bound: float) -> torch.Tensor:
+	if not 0.0 < bound < 1.0:
+		raise ValueError("bound must lie strictly between 0 and 1")
+
+	clamped = x.clamp(min=-bound, max=bound)
+	acos_clamped = torch.acos(clamped)
+
+	bound_tensor = torch.full_like(x, bound)
+	neg_bound_tensor = -bound_tensor
+	eps = torch.finfo(x.dtype).eps
+
+	upper_slope = -1.0 / torch.sqrt(torch.clamp(1.0 - bound_tensor * bound_tensor, min=eps))
+	lower_slope = -1.0 / torch.sqrt(torch.clamp(1.0 - neg_bound_tensor * neg_bound_tensor, min=eps))
+
+	upper_linear = torch.acos(bound_tensor) + (x - bound_tensor) * upper_slope
+	lower_linear = torch.acos(neg_bound_tensor) + (x - neg_bound_tensor) * lower_slope
+
+	return torch.where(x > bound_tensor, upper_linear, torch.where(x < neg_bound_tensor, lower_linear, acos_clamped))
+
+
+def _stable_theta_sin_ratio(theta: torch.Tensor, threshold: float = 1e-3) -> torch.Tensor:
+	theta_sq = theta * theta
+	taylor = 1.0 + theta_sq / 6.0 + 7.0 * theta_sq * theta_sq / 360.0
+	eps = torch.finfo(theta.dtype).eps
+	exact = theta / torch.sin(theta).clamp(min=eps)
+	return torch.where(theta.abs() < threshold, taylor, exact)
+
+
 def finsler_drift_dist(
 	x: torch.Tensor,
 	y: torch.Tensor,
@@ -169,16 +203,26 @@ def finsler_drift_dist(
 		asymmetry = 0.5 * ((term_xy - term_xx) + (term_yy - term_yx))
 	elif method == "slerp":
 		# Option 3.1: SLERP Approximation (Geodesic Path)
-		# Compute Angular Distance 
-		cos_theta = torch.clamp(torch.mm(identity_x_shared, identity_y_shared.t()), -1.0 + 1e-6, 1.0 - 1e-6)
-		theta = torch.acos(cos_theta)
-		sin_theta = torch.clamp(torch.sin(theta), min=1e-6)
-		theta_sin_ratio = torch.where(theta < 1e-5, torch.ones_like(theta), theta / sin_theta)
+		# Compute angular terms in float32 to avoid autocast-induced boundary hits.
+		identity_x_angle = identity_x_shared.float()
+		identity_y_angle = identity_y_shared.float()
+		drift_x_angle = drift_x_shared.float()
+		drift_y_angle = drift_y_shared.float()
+
+		term_xy = torch.mm(drift_x_angle, identity_y_angle.t())
+		term_xx = (drift_x_angle * identity_x_angle).sum(dim=1, keepdim=True).expand(m, n)
+		term_yy = (drift_y_angle * identity_y_angle).sum(dim=1, keepdim=True).expand(n, m).t()
+		term_yx = torch.mm(identity_x_angle, drift_y_angle.t())
+
+		bound = _angular_extrapolation_bound(identity_x_shared.dtype)
+		cos_theta = torch.mm(identity_x_angle, identity_y_angle.t())
+		theta = _safe_acos_linear_extrapolation(cos_theta, bound)
+		theta_sin_ratio = _stable_theta_sin_ratio(theta)
 
 		# Discretize the Path (Riemann sum)
 		K = 10
 		dt = 1.0 / K
-		t_steps = torch.linspace(dt / 2.0, 1.0 - dt / 2.0, steps=K, device=dist.device)
+		t_steps = torch.linspace(dt / 2.0, 1.0 - dt / 2.0, steps=K, device=dist.device, dtype=theta.dtype)
 		
 		asymmetry = torch.zeros_like(theta)
 
@@ -197,10 +241,18 @@ def finsler_drift_dist(
 	
 	elif method == "analytical":
 		# Option 3.2: Exact Analytical Integration of the Parallel-Transported Field
-		cos_theta = torch.clamp(torch.mm(identity_x_shared, identity_y_shared.t()), -1.0 + 1e-6, 1.0 - 1e-6)
-		theta = torch.acos(cos_theta)
-		sin_theta = torch.clamp(torch.sin(theta), min=1e-6)
-		theta_sin_ratio = torch.where(theta < 1e-5, torch.ones_like(theta), theta / sin_theta)
+		identity_x_angle = identity_x_shared.float()
+		identity_y_angle = identity_y_shared.float()
+		drift_x_angle = drift_x_shared.float()
+		drift_y_angle = drift_y_shared.float()
+
+		term_xy = torch.mm(drift_x_angle, identity_y_angle.t())
+		term_yx = torch.mm(identity_x_angle, drift_y_angle.t())
+
+		bound = _angular_extrapolation_bound(identity_x_shared.dtype)
+		cos_theta = torch.mm(identity_x_angle, identity_y_angle.t())
+		theta = _safe_acos_linear_extrapolation(cos_theta, bound)
+		theta_sin_ratio = _stable_theta_sin_ratio(theta)
 
 		asymmetry = 0.5 * theta_sin_ratio * (term_xy - term_yx)
 	else:
@@ -234,6 +286,7 @@ def _batch_hard(mat_distance, mat_similarity, indice=False):
 	sorted_mat_distance, positive_indices = torch.sort(mat_distance + (-9999999.) * (1 - mat_similarity), dim=1, descending=True)
 	hard_p = sorted_mat_distance[:, 0]
 	hard_p_indice = positive_indices[:, 0]
+ 
 	sorted_mat_distance, negative_indices = torch.sort(mat_distance + (9999999.) * (mat_similarity), dim=1, descending=False)
 	hard_n = sorted_mat_distance[:, 0]
 	hard_n_indice = negative_indices[:, 0]

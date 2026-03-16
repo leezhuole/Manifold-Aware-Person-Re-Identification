@@ -140,30 +140,86 @@ class FinslerDriftHead(nn.Module):
 
     def forward(self, x):
         drift = self.block(x)
+        return scale_drift_vector(drift, max_norm=self.max_norm)
 
-        # Calculate the Euclidean norm
-        norms = torch.norm(drift, p=2, dim=1, keepdim=True)
 
-        # Option 1: Simple Norm Clipping + Scaling
-        # scaled = torch.clamp(norms, max=self.max_norm)
-        # drift = drift * (scaled / (norms + 1e-6))
+def scale_drift_vector(drift, max_norm=0.95, eps=1e-6):
+    norms = torch.norm(drift, p=2, dim=1, keepdim=True)
 
-        # Option 2: Soft Tanh-Scaling
-        # scale = self.max_norm * torch.tanh(norms / self.max_norm) / (norms + 1e-6)
-        # drift = drift * scale
-        
-        # Option 3: Sigmoid Gated Scaling
-        scaling_factor = torch.sigmoid(norms)     # Smoothly scales from 0 to 1 as norm increases
-        unit_drift = drift / (norms + 1e-6)
-        drift = unit_drift * (scaling_factor * self.max_norm)
+    # Option 1: Simple Norm Clipping + Scaling
+    # scaled = torch.clamp(norms, max=max_norm)
+    # drift = drift * (scaled / (norms + eps))
 
-        # Option 4: Log-Barrier / Soft-Maximum
-        # beta = 5.0      # Sharpness of the transition
-        # max_norm_t = torch.tensor(self.max_norm, device=norms.device)
-        # smooth_norm = - (1/beta) * torch.logaddexp(-beta * norms, -beta * max_norm_t)
-        # drift = drift * (smooth_norm / (norms + 1e-6))
-    
-        return drift
+    # Option 2: Soft Tanh-Scaling
+    # scale = max_norm * torch.tanh(norms / max_norm) / (norms + eps)
+    # drift = drift * scale
+
+    # Option 3: Sigmoid Gated Scaling
+    scaling_factor = torch.sigmoid(norms)
+    unit_drift = drift / (norms + eps)
+    drift = unit_drift * (scaling_factor * max_norm)
+
+    # Option 4: Log-Barrier / Soft-Maximum
+    # beta = 5.0
+    # max_norm_t = torch.tensor(max_norm, device=norms.device)
+    # smooth_norm = - (1 / beta) * torch.logaddexp(-beta * norms, -beta * max_norm_t)
+    # drift = drift * (smooth_norm / (norms + eps))
+    return drift
+
+
+class DomainConditionedDriftHead(nn.Module):
+    def __init__(
+        self,
+        input_dim,
+        output_dim,
+        num_domains,
+        context_dim=64,
+        max_norm=0.95,
+        residual_scale=0.1,
+    ):
+        super(DomainConditionedDriftHead, self).__init__()
+        if num_domains <= 0:
+            raise ValueError("num_domains must be positive for DomainConditionedDriftHead")
+
+        hidden_dim = max(1, input_dim // 2)
+        self.num_domains = int(num_domains)
+        self.max_norm = max_norm
+        self.residual_scale = float(residual_scale)
+
+        self.domain_embeddings = nn.Embedding(self.num_domains, context_dim)
+        self.domain_projection = nn.Linear(context_dim, output_dim, bias=False)
+        self.domain_gate = nn.Sequential(
+            nn.Linear(input_dim, output_dim, bias=False),
+            nn.Sigmoid(),
+        )
+        self.residual_block = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim, bias=False),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim, bias=False),
+        )
+
+        init.normal_(self.domain_embeddings.weight, std=0.01)
+        init.normal_(self.domain_projection.weight, std=0.01)
+        init.normal_(self.residual_block[-1].weight, std=0.001)
+
+    def _resolve_domain_context(self, domain_ids=None, domain_probs=None):
+        if domain_probs is not None:
+            if domain_probs.dim() != 2 or domain_probs.size(1) != self.num_domains:
+                raise ValueError("domain_probs must have shape (batch, num_domains)")
+            return domain_probs @ self.domain_embeddings.weight
+
+        if domain_ids is None:
+            raise ValueError("Either domain_ids or domain_probs must be provided for domain-conditioned drift")
+
+        return self.domain_embeddings(domain_ids)
+
+    def forward(self, x, domain_ids=None, domain_probs=None):
+        domain_context = self._resolve_domain_context(domain_ids=domain_ids, domain_probs=domain_probs)
+        domain_drift = self.domain_projection(domain_context)
+        gated_domain_drift = domain_drift * self.domain_gate(x)
+        residual_drift = self.residual_block(x)
+        drift = gated_domain_drift + self.residual_scale * residual_drift
+        return scale_drift_vector(drift, max_norm=self.max_norm)
 
 
 class resnet50_finsler(nn.Module):
@@ -179,6 +235,12 @@ class resnet50_finsler(nn.Module):
         memory_bank_mode="full",
         drift_dim=2048,
         drift_method="symmetric_trapezoidal",
+        drift_conditioning="instance",
+        num_domains=0,
+        domain_embed_dim=64,
+        infer_domain_conditioning=False,
+        domain_temperature=1.0,
+        domain_residual_scale=0.1,
     ):
         super(resnet50_finsler, self).__init__()
         self.num_classes = num_classes
@@ -190,9 +252,20 @@ class resnet50_finsler(nn.Module):
         if int(drift_dim) <= 0:
             raise ValueError("drift_dim must be a positive integer")
         self.drift_dim = int(drift_dim)
+        if drift_conditioning not in {"instance", "domain"}:
+            raise ValueError("drift_conditioning must be either 'instance' or 'domain'")
+        self.drift_conditioning = drift_conditioning
+        self.num_domains = int(num_domains)
+        self.domain_temperature = float(domain_temperature)
+        self.infer_domain_conditioning = bool(infer_domain_conditioning)
         self.embedding_dim = self.identity_dim + self.drift_dim
         self.use_drift_in_eval = bool(use_drift_in_eval)
         self.supports_manifold = False
+
+        if self.drift_conditioning == "domain" and self.num_domains <= 0:
+            raise ValueError("num_domains must be positive when drift_conditioning='domain'")
+        if self.domain_temperature <= 0:
+            raise ValueError("domain_temperature must be positive")
 
         if memory_bank_mode not in {"full", "identity"}:
             raise ValueError("memory_bank_mode must be 'full' or 'identity'")
@@ -224,7 +297,20 @@ class resnet50_finsler(nn.Module):
         init.constant_(self.bn_neck.bias, 0)
         self.bn_neck.bias.requires_grad_(False)
 
-        self.drift_head = FinslerDriftHead(self.identity_dim, self.drift_dim)
+        if self.drift_conditioning == "domain":
+            self.drift_head = DomainConditionedDriftHead(
+                self.identity_dim,
+                self.drift_dim,
+                num_domains=self.num_domains,
+                context_dim=domain_embed_dim,
+                residual_scale=domain_residual_scale,
+            )
+            self.domain_classifier = nn.Linear(self.identity_dim, self.num_domains)
+            init.normal_(self.domain_classifier.weight, std=0.001)
+            init.constant_(self.domain_classifier.bias, 0)
+        else:
+            self.drift_head = FinslerDriftHead(self.identity_dim, self.drift_dim)
+            self.domain_classifier = None
 
         if self.num_classes > 0:
             self.classifier = nn.Linear(self.identity_dim, self.num_classes, bias=False)
@@ -234,13 +320,47 @@ class resnet50_finsler(nn.Module):
             return embedding
         return embedding[:, :self.identity_dim]
 
-    def forward(self, x):
+    def _predict_domain_logits(self, identity):
+        if self.domain_classifier is None:
+            return None
+        return self.domain_classifier(identity.detach())
+
+    def _resolve_domain_probs(self, identity, domain_ids=None, domain_probs=None):
+        domain_logits = self._predict_domain_logits(identity)
+        if domain_probs is not None:
+            return domain_probs, domain_logits
+
+        if domain_ids is not None:
+            resolved = F.one_hot(domain_ids, num_classes=self.num_domains).to(dtype=identity.dtype)
+            return resolved, domain_logits
+
+        if self.infer_domain_conditioning and domain_logits is not None:
+            return torch.softmax(domain_logits / self.domain_temperature, dim=1), domain_logits
+
+        uniform_probs = identity.new_full((identity.size(0), self.num_domains), 1.0 / self.num_domains)
+        return uniform_probs, domain_logits
+
+    def forward(self, x, domain_ids=None, domain_probs=None, return_aux=False):
         x = self.base(x)
         emb = self.pool(x)
         emb = emb.view(x.size(0), -1)
         identity = self.bn_neck(emb)
         identity_norm = F.normalize(identity) # L2-normalized identity vector
-        drift = self.drift_head(emb)  # raw ambient vector w
+        aux_outputs = None
+
+        if self.drift_conditioning == "domain":
+            resolved_domain_probs, domain_logits = self._resolve_domain_probs(
+                identity,
+                domain_ids=domain_ids,
+                domain_probs=domain_probs,
+            )
+            drift = self.drift_head(emb, domain_probs=resolved_domain_probs)
+            aux_outputs = {
+                "domain_logits": domain_logits,
+                "domain_probs": resolved_domain_probs,
+            }
+        else:
+            drift = self.drift_head(emb)
         
         # -- Enforcing orthoganality between identity and drift --
         inner_product = torch.sum(drift * identity_norm, dim=1, keepdim=True)
@@ -254,9 +374,14 @@ class resnet50_finsler(nn.Module):
             if self.num_classes > 0:
                 logits = self.classifier(identity)
             if logits is not None:
+                if return_aux or aux_outputs is not None:
+                    return combined_emb, combined_f, logits, aux_outputs
                 return combined_emb, combined_f, logits
             raise ValueError("Number of classes must be greater than 0 to compute logits.")
-        return self.select_eval_embedding(combined_f)
+        output = self.select_eval_embedding(combined_f)
+        if return_aux and aux_outputs is not None:
+            return output, aux_outputs
+        return output
 
 
 

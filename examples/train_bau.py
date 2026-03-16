@@ -25,7 +25,7 @@ from bau.evaluators import Evaluator, extract_features
 from bau.utils.data import IterLoader, MultiSourceTrainDataset
 from bau.utils.data import transforms as T
 from bau.utils.data.randaugment import RandAugment
-from bau.utils.data.sampler import RandomIdentitySampler
+from bau.utils.data.sampler import RandomIdentitySampler, RandomMultipleGallerySampler
 from bau.utils.data.preprocessor import Preprocessor, TwoViewPreprocessor
 from bau.utils.logging import Logger
 from bau.utils.lr_scheduler import WarmupMultiStepLR
@@ -96,8 +96,10 @@ def get_train_loader(args, dataset, height, width, batch_size, workers, num_inst
 
     train_set = sorted(dataset.train)
     rmgs_flag = num_instances > 0
-    if rmgs_flag:
+    if rmgs_flag and args.sampler == "RandomIdentity":
         sampler = RandomIdentitySampler(train_set, batch_size, num_instances)
+    elif rmgs_flag and args.sampler == "RandomMultipleGallery":
+        sampler = RandomMultipleGallerySampler(train_set, num_instances)
     else:
         sampler = None
     train_loader = IterLoader(DataLoader(TwoViewPreprocessor(train_set, root=images_dir, transform_w=transforms_w, transform_s=transforms_s),
@@ -139,7 +141,7 @@ def get_test_loader(dataset, height, width, batch_size, workers, testset=None):
     return test_loader
 
 
-def create_model(args, num_classes, manifold):
+def create_model(args, num_classes, manifold, num_domains):
     if args.arch == "resnet50_finsler":
         if args.drift_dim <= 0:
             raise ValueError("--drift-dim must be a positive integer")
@@ -151,6 +153,12 @@ def create_model(args, num_classes, manifold):
             memory_bank_mode=args.memory_bank_mode,
             drift_dim=args.drift_dim,
             drift_method=args.drift_method,
+            drift_conditioning=args.drift_conditioning,
+            num_domains=num_domains,
+            domain_embed_dim=args.domain_embed_dim,
+            infer_domain_conditioning=args.infer_domain_conditioning,
+            domain_temperature=args.domain_temperature,
+            domain_residual_scale=args.domain_residual_scale,
         )
     else:
         model = models.create(args.arch, num_classes=num_classes, manifold=manifold)
@@ -185,7 +193,12 @@ def main_worker(args):
 
     # Initialize wandb if available
     if wandb is not None:
-        wandb.init(project='BAU', config=vars(args), name=args.wandb_name or None)
+        wandb.init(
+            project='BAU',
+            config=vars(args),
+            name=args.wandb_name or None,
+            tags=args.wandb_tags if args.wandb_tags else None,
+        )
 
     # Organize dataset
     source_dataset = []
@@ -225,7 +238,10 @@ def main_worker(args):
         log("Selected resnet50_finsler; forcing Euclidean manifold for Finsler distance.", level=1)
         manifold = None
     num_classes = train_dataset.num_train_pids
-    model = create_model(args, num_classes=num_classes, manifold=manifold)
+    num_source_domains = len(source_dataset)
+    if args.drift_conditioning == "domain" and args.arch != "resnet50_finsler":
+        raise ValueError("--drift-conditioning domain is only supported with --arch resnet50_finsler")
+    model = create_model(args, num_classes=num_classes, manifold=manifold, num_domains=num_source_domains)
     log("Created model and moved to device", level=2)
 
     module = getattr(model, 'module', model)
@@ -332,7 +348,7 @@ def main_worker(args):
     # Configure split normalization for Finsler Full mode
     split_norm = None
     if args.arch == "resnet50_finsler" and args.memory_bank_mode == "full":
-        split_norm = memory_bank_features // 2
+        split_norm = getattr(module, 'identity_dim', memory_bank_features // 2)
         log(f"Configuring MemoryBank with split_norm={split_norm} for Finsler embeddings", level=1)
 
     memory_bank = MemoryBank(memory_bank_features, num_classes, manifold=manifold, split_norm=split_norm).cuda()
@@ -451,7 +467,8 @@ def main_worker(args):
                          alpha_module=alpha_module,
                          bidirectional_triplet=args.bidirectional_triplet,
                          use_omega_reg=args.use_omega_reg,
-                         omega_reg_weight=args.omega_reg_weight)
+                         omega_reg_weight=args.omega_reg_weight,
+                         domain_token_loss_weight=args.domain_token_loss_weight)
     
     log("Trainer constructed", level=2)
 
@@ -602,6 +619,8 @@ if __name__ == '__main__':
                              'default: 0 (NOT USE)')
     parser.add_argument('--height', type=int, default=256, help='input height')
     parser.add_argument('--width', type=int, default=128, help='input width')
+    parser.add_argument('--sampler', type=str, default='RandomIdentity', 
+                        choices=['RandomIdentity', 'RandomMultipleGallery'], help='sampler for training data') 
 
     # path  
     working_dir = osp.dirname(osp.abspath(__file__))
@@ -666,12 +685,26 @@ if __name__ == '__main__':
                         help='memory bank embedding mode for resnet50_finsler')
     parser.add_argument('--drift-dim', type=int, default=2048,
                         help='drift branch embedding dimension (resnet50_finsler only)')
+    parser.add_argument('--drift-conditioning', type=str, default='instance', choices=['instance', 'domain'],
+                        help='choose whether drift is conditioned per instance or per source domain')
+    parser.add_argument('--domain-embed-dim', type=int, default=64,
+                        help='latent embedding width used for domain-conditioned drift prototypes')
+    parser.add_argument('--infer-domain-conditioning', type=lambda x: x.lower() == 'true', default=True,
+                        help='infer a soft domain token from images during evaluation when using domain-conditioned drift')
+    parser.add_argument('--domain-temperature', type=float, default=1.0,
+                        help='softmax temperature for inferred domain tokens during evaluation')
+    parser.add_argument('--domain-residual-scale', type=float, default=0.1,
+                        help='residual per-instance correction added on top of the domain drift prototype')
+    parser.add_argument('--domain-token-loss-weight', type=float, default=0.1,
+                        help='auxiliary supervision weight for the soft domain-token predictor')
     
     # fine-tuning
     parser.add_argument('--fine-tuning', type=lambda x: x.lower() == 'true', default=False, help='fine-tune the model')
     parser.add_argument('--checkpoint-path', type=str, default='', help='path to the checkpoint to load')
 
     parser.add_argument('--wandb-name', type=str, default='', help='additional name info for wandb runs')
+    parser.add_argument('--wandb-tags', nargs='*', default=[],
+                        help='optional W&B tags to attach to the run, e.g. --wandb-tags finsler domain-conditioned agreidv2')
     parser.add_argument('--verbosity', type=int, default=0, choices=[0, 1, 2], help='increase output verbosity: 0=minimal, 1=info, 2=debug')
     main()
 

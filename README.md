@@ -363,3 +363,149 @@ This repository should be read as **BAU + asymmetric geometry + AG-ReIDv2 cross-
 - and the stabilization choices added for the drift branch.
 
 That is the core distinction this fork adds over the original BAU implementation.
+
+---
+
+## Research Status Update — 2026-03-11
+
+Current results suggest that the original **per-instance drift** formulation is not yet strong enough to support a broad claim that explicit Finsler asymmetry consistently improves domain-generalizable person ReID. In particular, the observed gains over the Euclidean BAU baseline remain small, and the learned drift magnitude often stays close to zero. A conservative interpretation is that BAU-style DG training partially suppresses instance-level asymmetry because the training objective strongly favors identity invariance.
+
+The current research effort is therefore pivoting toward a more structured hypothesis:
+
+> **Asymmetry should be modeled primarily at the domain/view level, not at the identity level.**
+
+This pivot is motivated by the AG-ReIDv2 setting already supported in the repository. In cross-view aerial/ground retrieval, the dominant directional bias is more plausibly tied to **camera/view geometry** than to a specific person identity. The next implementation stage therefore keeps the identity pathway stable while reworking the drift branch into a **domain-conditioned nuisance component**.
+
+### Current pivot hypothesis
+
+1. **When asymmetry helps:** primarily in structured cross-view or cross-domain settings where query and gallery observations are not information-symmetric.
+2. **What level it should live at:** domain/view-level latent structure, optionally with a small per-instance residual.
+3. **Why DG collapses it:** alignment and uniformity objectives penalize domain-specific variation, so an unconstrained instance drift tends to shrink toward a near-Euclidean regime.
+
+### Active implementation direction
+
+The current codebase is being extended to support a modular **domain-conditioned Finsler drift** path that:
+
+- preserves the existing identity branch,
+- reuses source-domain labels already available in multi-source BAU training,
+- supports a soft domain/view-token predictor at inference time,
+- keeps the original instance-conditioned drift path available for comparison,
+- and remains backward-compatible with existing `resnet50_finsler` experiments where possible.
+
+### Lowest-risk way to test the pivot
+
+The safest validation path is:
+
+1. start with **AG-ReIDv2 source-domain conditioning** using the already available view-filtered source datasets,
+2. keep the original BAU optimization recipe as unchanged as possible,
+3. modify only the drift-generation mechanism in the first pass,
+4. compare against both the Euclidean BAU baseline and the current instance-drift Finsler baseline,
+5. report both **identity-only** and **drift-enabled** evaluation,
+6. add diagnostics showing whether domain-conditioned drift meaningfully changes ranking behavior.
+
+This makes the next phase of the project less risky: even if the new drift formulation does not improve mAP materially, it can still clarify whether asymmetry is a useful **structured nuisance factor** rather than a direct accuracy booster.
+
+### Domain-conditioned drift head: architecture and evaluation prior
+
+The new `DomainConditionedDriftHead` is meant to answer a very specific question:
+
+> instead of predicting a completely free drift vector per sample, can the model build drift from a **shared domain/view prior** plus a small residual correction?
+
+The easiest way to read the current implementation is to split it into four parts:
+
+1. **Identity path**
+    - the image goes through the ResNet backbone, GeM pooling, and BN neck exactly as before,
+    - this produces the identity feature used for ID classification and the identity slice of the final embedding.
+
+2. **Domain-token predictor**
+    - when `--drift-conditioning domain` is active, a small linear classifier reads the BN-neck identity feature,
+    - during training, the trainer already knows the source-domain label `did`, so the model can use that label directly for conditioning,
+    - in parallel, an auxiliary cross-entropy loss can train the predictor to recover the source domain from the identity feature.
+
+3. **Domain-conditioned drift prior**
+    - each source domain has a learnable domain embedding,
+    - the selected or inferred domain token is mapped into drift space,
+    - a feature-dependent gate modulates how much of that domain prior should be expressed for the current image.
+
+4. **Residual correction and final drift**
+    - a small residual MLP still produces a per-instance correction,
+    - the final drift is:
+
+$$
+\omega(x) = \omega_{domain}(x) + \lambda\,\omega_{residual}(x)
+$$
+
+where $\lambda$ is `domain_residual_scale`,
+- the drift is then norm-scaled and orthogonalized against the normalized identity feature before concatenation.
+
+#### What happens on unseen instances at evaluation?
+
+At evaluation time there is usually **no ground-truth domain label** available for the target image. The current design therefore uses a **soft prior**:
+
+1. compute the BN-neck identity feature,
+2. feed a **detached** copy of it into the domain classifier,
+3. obtain domain logits over the training source domains,
+4. convert logits into a soft probability vector with temperature scaling,
+5. use that probability vector to form a weighted combination of the learned domain embeddings,
+6. map that combined domain context into drift space,
+7. add the residual correction and continue as usual.
+
+So the model does **not** assume that the test image belongs exactly to one known source domain. Instead, it predicts a **soft mixture over source-domain priors** and uses that mixture as the conditioning signal for the drift branch.
+
+The `detach()` in `_predict_domain_logits()` is intentional: the domain-token predictor is trained to **read** identity features, but it does not directly push gradients back into the identity backbone through this auxiliary path.
+
+#### Mermaid flow chart
+
+```mermaid
+flowchart LR
+     A[Input image] --> B[Modified ResNet50 backbone]
+     B --> C[GeM pooling]
+     C --> D[BN neck identity feature]
+
+     D --> E[Identity normalization]
+     D --> F[ID classifier]
+     F --> Lce[CE loss]
+
+     D -->|detached copy| G[Domain token classifier]
+     G -->|training: logits vs source did| Ldt[Aux domain-token CE loss]
+     G --> H{Conditioning source?}
+
+     H -->|training| I[Known source-domain id]
+     H -->|evaluation| J[Softmax with temperature]
+
+     I --> K[One-hot domain token]
+     J --> M[Soft domain probabilities]
+
+     K --> N[Domain embedding lookup / mixture]
+     M --> N
+
+     C --> O[Residual drift MLP]
+     C --> P[Feature gate]
+     N --> Q[Linear projection to drift space]
+     Q --> R[Gate domain prior]
+     P --> R
+     R --> S[Domain-conditioned drift prior]
+     O --> T[Residual drift correction]
+     S --> U[Add prior + scaled residual]
+     T --> U
+     U --> V[Norm scaling]
+
+     E --> W[Orthogonalize drift against identity]
+     V --> W
+     W --> X[Concat identity and drift]
+
+     X --> Ltri[Triplet loss]
+     X --> Luni[Uniform loss]
+     X --> Ldom[Domain loss]
+     E --> Lalign[Alignment loss on identity slice]
+```
+
+#### Loss connections in the current implementation
+
+- **CE loss**: applied to the identity classifier output.
+- **Triplet loss**: applied to the combined embedding path already used by `resnet50_finsler`.
+- **Alignment loss**: still applied on the identity slice by default.
+- **Uniform loss / domain loss**: use the current Finsler embedding path as in the trainer.
+- **Auxiliary domain-token CE loss**: only active when the domain-conditioned path returns domain logits and `--domain-token-loss-weight > 0`.
+
+This means the new head is **not** a separate second model. It is a drop-in replacement for the old drift head inside `resnet50_finsler`, with one additional auxiliary loss that teaches the model how to infer a soft domain prior at test time.

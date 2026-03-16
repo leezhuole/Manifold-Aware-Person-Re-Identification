@@ -29,14 +29,16 @@ EPOCHS=60                       # Reduced from 60 to 20 for faster iteration and
 # WARMUP_STEP=3                   # Proportionally scale warmup steps to 20 epochs (originally 10 for 60 epochs)
 # MILESTONES="10 15"              # Proportionally scale milestones to 20 epochs (originally 30 and 50 for 60 epochs)
 OMEGA_REG_WEIGHT=1.5            # New hyper-parameter for omega regularization weight
-DRIFT_METHOD=analytical    # Method for calculating the finsler distance [constant_drift, symmetric_trapezoidal, slerp, analytical]
+DRIFT_METHOD=symmetric_trapezoidal    # Method for calculating the finsler distance [constant_drift, symmetric_trapezoidal, slerp, analytical]
 # SOURCE_DATASET="market1501 cuhksysu cuhk03"
 # TARGET_DATASET=msmt17
 SOURCE_DATASET="market1501 msmt17 cuhksysu"
 TARGET_DATASET=cuhk03
+DRT_CONDITIONING=instance       # How to condition the drift (instance-level, class-level, or global)
 
-# Run Specific
-RUN_NAME="FHSigGate_Drift${DRIFT_METHOD}_BidirectTri__OmegaReg${OMEGA_REG_WEIGHT}_OrthoEnforced"
+# Run Specific Tags
+WANDB_TAGS=(finsler "dt-${TARGET_DATASET}" "drift-condition-${DRT_CONDITIONING}" "drift-method-${DRIFT_METHOD}" FHSigGate BidirectTri "OmegaReg${OMEGA_REG_WEIGHT}" OrthoEnforced)
+RUN_NAME="FHSigGate_Drift${DRIFT_METHOD}_DriftCond${DRT_CONDITIONING}"
 # RUN_NAME="FHSigGate+ModFinsDist_BidirectTri_OmegaReg${OMEGA_REG_WEIGHT}"
 
 LOGS_DIR="$(pwd)/logs/AGReIDv2_sweep/job_${SLURM_JOB_ID}_dt_${TARGET_DATASET}_${RUN_NAME}"
@@ -73,6 +75,8 @@ srun --unbuffered python "${SNAP_DIR}/examples/train_bau.py" \
   --drift-method "${DRIFT_METHOD}" \
   --use-omega-reg \
   --omega-reg-weight "${OMEGA_REG_WEIGHT}" \
+  --drift-conditioning "${DRT_CONDITIONING}" \
+  --wandb-tags "${WANDB_TAGS[@]}"
   # --use-drift-align \
   # --drift-dim 32 \
 

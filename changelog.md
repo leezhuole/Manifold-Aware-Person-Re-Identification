@@ -1,5 +1,44 @@
 # Changelog
 
+## [2026-03-12 08:59:37 UTC] - Document domain-conditioned drift head architecture in README
+**Files Modified:** `README.md`
+**Functions Altered:** N/A (documentation update)
+
+### Problem Addressed
+The new `DomainConditionedDriftHead` pivot introduced a more complex conditioning path than the original per-instance `FinslerDriftHead`, and the current README did not yet explain clearly how the new drift prior is formed, how it connects to the identity branch, or how evaluation works when ground-truth target-domain labels are unavailable.
+
+### Modification
+Appended a new README section that explains the domain-conditioned drift architecture in plain language, describes how the auxiliary domain-token predictor is used during training and evaluation, and adds a Mermaid flowchart showing the identity branch, domain-token classifier, domain embedding mixture, residual drift correction, final concatenation, and the new auxiliary domain-token loss.
+
+### Expected Behavior
+Readers should now be able to understand how the new drift head differs from the older instance-conditioned head, why the evaluation-time prior is a soft mixture over source domains, and how the added auxiliary loss fits into the existing BAU/Finsler training pipeline.
+
+## [2026-03-11 22:18:12 UTC] - Add W&B tags CLI support for training launches
+**Files Modified:** `examples/train_bau.py`, `finsler_single_learnableOmega.sbatch`
+**Functions Altered:** `main_worker` in `examples/train_bau.py`
+
+### Problem Addressed
+Training runs could already set a W&B run name from the CLI, but there was no matching way to attach W&B tags directly from sbatch launch scripts. That made it harder to organize experiment groups, especially while comparing the new domain-conditioned Finsler pivot against older baselines.
+
+### Modification
+Added a new `--wandb-tags` CLI argument to `examples/train_bau.py` and passed it through to `wandb.init(..., tags=...)`. Updated `finsler_single_learnableOmega.sbatch` to define a `WANDB_TAGS` Bash array and forward it into the training command.
+
+### Expected Behavior
+Sbatch launch scripts can now attach arbitrary W&B tags directly at launch time without editing Python code. Runs should appear in W&B with both the configured run name and the provided tag list, making sweeps and ablations easier to filter and compare.
+
+## [2026-03-11 21:55:18 UTC] - Introduce domain-conditioned Finsler drift pivot scaffolding
+**Files Modified:** `bau/models/model.py`, `bau/trainers.py`, `examples/train_bau.py`, `examples/test.py`, `README.md`, `changelogs/perDomainPerViewAsymmetry.md`
+**Functions Altered:** `FinslerDriftHead.forward`, `resnet50_finsler.__init__`, `resnet50_finsler.forward`, `BAUTrainer.__init__`, `BAUTrainer.train`, `create_model` in `examples/train_bau.py`, `create_model` in `examples/test.py`
+
+### Problem Addressed
+The previous Finsler implementation modeled asymmetry purely at the per-instance level. Current experiments suggest that this is too weak and too easily suppressed by BAU's domain-generalization objectives to support a strong scientific claim. The repository therefore needed a low-risk path to test whether asymmetry is better represented as a structured domain/view effect while preserving the existing BAU and Finsler baselines for comparison.
+
+### Modification
+Added an opt-in domain-conditioned drift pathway to `resnet50_finsler` via a new `DomainConditionedDriftHead`, along with a lightweight soft domain-token predictor for inference-time conditioning. Updated the trainer to pass source-domain IDs already present in the DG pipeline and to optionally supervise the token predictor through a small auxiliary loss. Extended the training and standalone evaluation CLIs with domain-conditioning controls, improved standalone checkpoint unwrapping for wrapped training checkpoints, corrected the Finsler memory-bank split normalization to use the model identity slice width, appended a dated README status update describing the research pivot, and created `changelogs/perDomainPerViewAsymmetry.md` to document the intended staged implementation strategy.
+
+### Expected Behavior
+The codebase now supports direct A/B testing between the original instance-conditioned Finsler drift and a new domain-conditioned variant without disrupting the baseline BAU path. Training can reuse existing source-domain labels as drift-conditioning metadata, and evaluation can optionally infer soft domain tokens from images so the asymmetric branch remains usable on unseen target data. The new documentation should also make the current research direction and safest validation protocol explicit.
+
 ## [2026-03-09 00:00:00 UTC] - Rewrote README to document the fork-specific contributions over BAU
 **Files Modified:** `README.md`
 **Functions Altered:** N/A (documentation update)
