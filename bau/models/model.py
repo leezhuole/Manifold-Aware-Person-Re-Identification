@@ -38,13 +38,36 @@ from geoopt import PoincareBall
 #         return -dists
 
 
+def _build_resnet50_base(pretrained=True, in_stages=(1, 2, 3)):
+    """Build a stride-1-layer4 ResNet50 backbone with optional InstanceNorm2d.
+
+    Args:
+        pretrained: load ImageNet weights.
+        in_stages: tuple of stage indices (1-3) after which InstanceNorm2d is
+            inserted. E.g. (1, 2, 3) reproduces the BAU/IFN default; () removes
+            all IN layers.
+    """
+    resnet = torchvision.models.resnet50(pretrained=pretrained)
+    resnet.layer4[0].conv2.stride = (1, 1)
+    resnet.layer4[0].downsample[0].stride = (1, 1)
+
+    stage_channels = {1: 256, 2: 512, 3: 1024}
+    layers = [resnet.conv1, resnet.bn1, resnet.relu, resnet.maxpool]
+    for stage_idx, stage_module in [(1, resnet.layer1), (2, resnet.layer2), (3, resnet.layer3)]:
+        layers.append(stage_module)
+        if stage_idx in in_stages:
+            layers.append(nn.InstanceNorm2d(stage_channels[stage_idx]))
+    layers.append(resnet.layer4)
+    return nn.Sequential(*layers)
+
+
 class resnet50(nn.Module):
     """
     Adapted such that the model's forward pass outputs embeddings that are
     on the defined manifold (if provided). Example: Poincare ball. 
 
     """
-    def __init__(self, num_classes=0, pretrained=True, manifold=None):
+    def __init__(self, num_classes=0, pretrained=True, manifold=None, in_stages=(1, 2, 3)):
         super(resnet50, self).__init__()
         self.num_classes = num_classes
         self.manifold = manifold
@@ -53,25 +76,7 @@ class resnet50(nn.Module):
         self.memory_bank_dim = 2048
         self.supports_manifold = True
         
-        # resnet50 backbone
-        resnet = torchvision.models.resnet50(pretrained=pretrained)
-
-        resnet.layer4[0].conv2.stride = (1, 1)
-        resnet.layer4[0].downsample[0].stride = (1, 1)
-
-        self.base = nn.Sequential(
-            resnet.conv1, 
-            resnet.bn1, 
-            resnet.relu, 
-            resnet.maxpool,
-            resnet.layer1, 
-            nn.InstanceNorm2d(256),
-            resnet.layer2, 
-            nn.InstanceNorm2d(512),
-            resnet.layer3, 
-            nn.InstanceNorm2d(1024),
-            resnet.layer4
-        )
+        self.base = _build_resnet50_base(pretrained=pretrained, in_stages=in_stages)
 
         # pooling
         self.pool = GeneralizedMeanPoolingP(output_size=(1, 1))
@@ -241,6 +246,7 @@ class resnet50_finsler(nn.Module):
         infer_domain_conditioning=False,
         domain_temperature=1.0,
         domain_residual_scale=0.1,
+        in_stages=(1, 2, 3),
     ):
         super(resnet50_finsler, self).__init__()
         self.num_classes = num_classes
@@ -271,24 +277,7 @@ class resnet50_finsler(nn.Module):
             raise ValueError("memory_bank_mode must be 'full' or 'identity'")
         self.memory_bank_dim = self.embedding_dim if memory_bank_mode == "full" else self.identity_dim
 
-        resnet = torchvision.models.resnet50(pretrained=pretrained)
-
-        resnet.layer4[0].conv2.stride = (1, 1)
-        resnet.layer4[0].downsample[0].stride = (1, 1)
-
-        self.base = nn.Sequential(
-            resnet.conv1,
-            resnet.bn1,
-            resnet.relu,
-            resnet.maxpool,
-            resnet.layer1,
-            nn.InstanceNorm2d(256),
-            resnet.layer2,
-            nn.InstanceNorm2d(512),
-            resnet.layer3,
-            nn.InstanceNorm2d(1024),
-            resnet.layer4,
-        )
+        self.base = _build_resnet50_base(pretrained=pretrained, in_stages=in_stages)
 
         self.pool = GeneralizedMeanPoolingP(output_size=(1, 1))
 

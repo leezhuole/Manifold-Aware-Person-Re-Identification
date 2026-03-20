@@ -141,7 +141,16 @@ def get_test_loader(dataset, height, width, batch_size, workers, testset=None):
     return test_loader
 
 
+def _parse_in_stages(raw: str):
+    """Parse '1,2,3' | '1,2' | 'none' into a tuple of ints."""
+    raw = raw.strip().lower()
+    if raw in ("none", ""):
+        return ()
+    return tuple(int(s) for s in raw.split(","))
+
+
 def create_model(args, num_classes, manifold, num_domains):
+    in_stages = _parse_in_stages(args.backbone_in_stages)
     if args.arch == "resnet50_finsler":
         if args.drift_dim <= 0:
             raise ValueError("--drift-dim must be a positive integer")
@@ -159,9 +168,10 @@ def create_model(args, num_classes, manifold, num_domains):
             infer_domain_conditioning=args.infer_domain_conditioning,
             domain_temperature=args.domain_temperature,
             domain_residual_scale=args.domain_residual_scale,
+            in_stages=in_stages,
         )
     else:
-        model = models.create(args.arch, num_classes=num_classes, manifold=manifold)
+        model = models.create(args.arch, num_classes=num_classes, manifold=manifold, in_stages=in_stages)
     model.cuda()
     model = torch.nn.DataParallel(model)
     return model
@@ -697,6 +707,9 @@ if __name__ == '__main__':
                         help='residual per-instance correction added on top of the domain drift prototype')
     parser.add_argument('--domain-token-loss-weight', type=float, default=0.1,
                         help='auxiliary supervision weight for the soft domain-token predictor')
+    parser.add_argument('--backbone-in-stages', type=str, default='1,2,3',
+                        help='comma-separated backbone stages (1-3) after which InstanceNorm2d is inserted; '
+                             'use "none" to remove all IN layers (default: 1,2,3)')
     
     # fine-tuning
     parser.add_argument('--fine-tuning', type=lambda x: x.lower() == 'true', default=False, help='fine-tune the model')

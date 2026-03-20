@@ -1,6 +1,7 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "python.condaPath": "/home/stud/leez/miniconda/bin/conda",
     "python.defaultInterpreterPath": "/home/stud/leez/miniconda3/envs/BAU/bin/python",
     "python-envs.pythonProjects": []
 }

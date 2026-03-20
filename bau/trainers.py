@@ -1,6 +1,7 @@
   
 from __future__ import print_function, absolute_import
 import time
+import inspect
 
 import torch
 import torch.nn as nn
@@ -37,6 +38,7 @@ class BAUTrainer(object):
         module = getattr(model, 'module', model)
         self.dist_func = getattr(module, 'dist_func', euclidean_dist)
         self.identity_dim = getattr(module, 'identity_dim', None)  # e.g. 2048 for resnet50_finsler
+        self.takes_domain_ids = 'domain_ids' in inspect.signature(module.forward).parameters
         
         self.criterion_ce = CrossEntropyLabelSmooth(num_classes=num_classes).cuda()
         self.criterion_domain_token = nn.CrossEntropyLoss().cuda()
@@ -102,7 +104,10 @@ class BAUTrainer(object):
                 # feedforward
                 inputs = torch.cat([inputs_w, inputs_s], dim=0)
                 domain_ids = torch.cat([dids, dids], dim=0)
-                model_outputs = self.model(inputs, domain_ids=domain_ids)
+                if self.takes_domain_ids:
+                    model_outputs = self.model(inputs, domain_ids=domain_ids)
+                else:
+                    model_outputs = self.model(inputs)
                 domain_token_logits = None
                 if isinstance(model_outputs, tuple) and len(model_outputs) == 4:
                     emb, f, logits, aux_outputs = model_outputs
@@ -152,15 +157,16 @@ class BAUTrainer(object):
                 #     f_w_repulse = f_w
                 #     f_s_repulse = f_s
 
-                # compute weights
+                # compute weights — use identity-only features so drift
+                # does not contaminate the reciprocal k-NN Jaccard graph
                 with torch.no_grad():
+                    f_for_sims = torch.cat([f_w_align, f_s_align], dim=0)
                     if self.manifold is None:
-                        sims = torch.matmul(f, f.t()) # b*b
+                        sims = torch.matmul(f_for_sims, f_for_sims.t()) # b*b
                     else:
-                        # Use negative squared geodesic distances, mirroring poincare-embeddings.
                         sims = -self.manifold.dist(
-                            f.unsqueeze(1),
-                            f.unsqueeze(0),
+                            f_for_sims.unsqueeze(1),
+                            f_for_sims.unsqueeze(0),
                             dim=-1,
                         ).pow(2)
                     topk = torch.sort(sims, dim=1, descending=True).indices[:, :self.k] # b*k
@@ -194,7 +200,7 @@ class BAUTrainer(object):
 
                 total_align = loss_align + loss_drift_align
                 
-                loss_uniform = 0.5*(self.uniform_loss(f_w, alpha_value) + self.uniform_loss(f_s, alpha_value)) if self.use_uniform else torch.tensor(0.0).cuda()
+                loss_uniform = 0.5*(self.uniform_loss(f_w_align) + self.uniform_loss(f_s_align)) if self.use_uniform else torch.tensor(0.0).cuda()
                 
                 loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids, alpha_value) +
                                    self.domain_loss(f_s, self.memory_bank.features, dids, alpha_value)) if self.use_domain else torch.tensor(0.0).cuda()
@@ -309,13 +315,13 @@ class BAUTrainer(object):
             dist_squared = effective_dist_func(f_s, f_w, alpha=alpha).pow(2)
 
         # Case 3: Non-euclidean manifold
-        elif self.manifold is not None:
-            # Match the hyperbolic weighting strategy seen in geoopt/vision examples.
-            dist_squared = self.manifold.dist(
-                f_s.unsqueeze(1),
-                f_w.unsqueeze(0),
-                dim=-1,
-            ).pow(2)
+        # elif self.manifold is not None:
+        #     # Match the hyperbolic weighting strategy seen in geoopt/vision examples.
+        #     dist_squared = self.manifold.dist(
+        #         f_s.unsqueeze(1),
+        #         f_w.unsqueeze(0),
+        #         dim=-1,
+        #     ).pow(2)
     
         else:
             raise ValueError("Invalid manifold/alpha configuration for align loss.")
@@ -325,33 +331,12 @@ class BAUTrainer(object):
         align_loss = (dist_squared[mask] * w[mask]).sum() / w[mask].sum()
         return align_loss
 
-    def uniform_loss(self, f, alpha=None):
-        
-        effective_dist_func = self.dist_func
-        # For Finsler models with concatenated [identity|drift], use the full
-        # embedding so the asymmetric drift contributes to the repulsion signal.
-        if self.identity_dim is not None and effective_dist_func is finsler_drift_dist and f.size(1) <= self.identity_dim:
-            effective_dist_func = euclidean_dist
-
-        # Case 2: Finsler spaces and Euclidean Manifold
+    def uniform_loss(self, f):
+        # Uniform loss always uses symmetric Euclidean distance on identity-only
+        # features. Applying an asymmetric distance here creates contradictory
+        # gradients that suppress drift (see plan Part 5, Discrepancy U2).
         if self.manifold is None:
-            pairwise = effective_dist_func(f, f, alpha)  # (B, B)
-            idx = torch.triu_indices(
-                pairwise.size(0), 
-                pairwise.size(1), 
-                offset=1, 
-                device=f.device,
-            )
-            pairwise = pairwise[idx[0], idx[1]]
-            u_loss = pairwise.pow(2).mul(-2).exp().mean().log()
-
-        # Case 3: Non-euclidean manifold
-        elif self.manifold is not None:
-            pairwise = self.manifold.dist(
-                f.unsqueeze(1),
-                f.unsqueeze(0),
-                dim=-1,
-            )
+            pairwise = euclidean_dist(f, f)  # (B, B) symmetric
             idx = torch.triu_indices(
                 pairwise.size(0),
                 pairwise.size(1),
@@ -360,13 +345,16 @@ class BAUTrainer(object):
             )
             pairwise = pairwise[idx[0], idx[1]]
             u_loss = pairwise.pow(2).mul(-2).exp().mean().log()
-
         else:
-            raise ValueError("Invalid manifold/alpha configuration for uniform loss.")
+            raise ValueError("Invalid manifold configuration for uniform loss.")
         return u_loss
 
     def domain_loss(self, f, c, dids, alpha=None):
         m, n = f.size(0), c.size(0)
+        
+        # Set distance function to Euclidean and disable alpha
+        # effective_dist_func = euclidean_dist
+        # alpha = None  # alpha is meaningless on identity-only features
         
         effective_dist_func = self.dist_func
         # For Finsler models with concatenated [identity|drift], use the full
@@ -379,28 +367,28 @@ class BAUTrainer(object):
             dist_squared = effective_dist_func(f, c, alpha).pow(2)
 
         # Case 3: Non-euclidean manifold
-        elif self.manifold is not None:
-            chunk_size = self.manifold_chunk_size
-            if chunk_size is None:
-                dist_squared = self.manifold.dist(
-                    f.unsqueeze(1),
-                    c.unsqueeze(0),
-                    dim=-1,
-                ).pow(2)
-            else:
-                if chunk_size <= 0:
-                    raise ValueError("manifold_chunk_size must be None or a positive integer")
-                dist_squared = torch.empty(m, n, device=f.device, dtype=f.dtype)
-                f_unsqueezed = f.unsqueeze(1)
-                for i in range(0, n, chunk_size):
-                    end = min(i + chunk_size, n)
-                    c_chunk = c[i:end]
-                    dist_squared_chunk = self.manifold.dist(
-                        f_unsqueezed,
-                        c_chunk.unsqueeze(0),
-                        dim=-1,
-                    ).pow(2)
-                    dist_squared[:, i:end] = dist_squared_chunk
+        # elif self.manifold is not None:
+        #     chunk_size = self.manifold_chunk_size
+        #     if chunk_size is None:
+        #         dist_squared = self.manifold.dist(
+        #             f.unsqueeze(1),
+        #             c.unsqueeze(0),
+        #             dim=-1,
+        #         ).pow(2)
+        #     else:
+        #         if chunk_size <= 0:
+        #             raise ValueError("manifold_chunk_size must be None or a positive integer")
+        #         dist_squared = torch.empty(m, n, device=f.device, dtype=f.dtype)
+        #         f_unsqueezed = f.unsqueeze(1)
+        #         for i in range(0, n, chunk_size):
+        #             end = min(i + chunk_size, n)
+        #             c_chunk = c[i:end]
+        #             dist_squared_chunk = self.manifold.dist(
+        #                 f_unsqueezed,
+        #                 c_chunk.unsqueeze(0),
+        #                 dim=-1,
+        #             ).pow(2)
+        #             dist_squared[:, i:end] = dist_squared_chunk
 
         else:
             raise ValueError("Invalid manifold/alpha configuration for domain loss.")

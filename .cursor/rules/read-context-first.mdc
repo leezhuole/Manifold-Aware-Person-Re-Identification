@@ -1,0 +1,19 @@
+---
+description: Read README and changelog first to understand repo status and avoid repeated mistakes
+alwaysApply: true
+---
+
+# Read Repository Context First
+
+At the start of any task, read these two files before changing code or debugging:
+
+1. **README.md** — Repository goal, roadmap, and current design.
+2. **changelog.md** — Past modifications, problems addressed, and expected behavior after each patch.
+
+Use this context to:
+
+- Align changes with the project’s stated objectives.
+- Avoid repeating fixes or workarounds that are already documented.
+- Break out of modification loops by checking whether the same bug or approach appears in the changelog.
+
+Keep the rule in mind: read first, then modify.

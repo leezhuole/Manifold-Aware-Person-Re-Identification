@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=bau-finsler                # Job name
-#SBATCH --gres=gpu:1,VRAM:36G                 # Request one 36GB-class GPU (reduce OOM risk)
-#SBATCH --nodes=1                             # Run all processes on a single node
-#SBATCH --cpus-per-task=5                     # Number of CPU cores per task
-#SBATCH --mem=36G                             # Total memory for the entire job
-#SBATCH --time=15:00:00                       # Time limit hrs:min:sec per task
-#SBATCH --exclude=node7,node9,node1,node13    # Exclude problematic nodes
-# #SBATCH --constraint="GPU_MODEL:a40"          # Ensure specific GPU model if available
-#SBATCH --output=logs/AGReIDv2_sweep/finsler-%j.out          # Standard output log
-#SBATCH --error=logs/AGReIDv2_sweep/finsler-%j.err           # Error log
+#SBATCH --job-name=bau-finsler-learnableOmega            # Job name
+#SBATCH --gres=gpu:1,VRAM:28G                            # Request one 28GB-class GPU (reduce OOM risk)
+#SBATCH --nodes=1                                        # Run all processes on a single node
+#SBATCH --cpus-per-task=5                                # Number of CPU cores per task
+#SBATCH --mem=28G                                        # Dataset + model + memory bank fits in 28 GB
+#SBATCH --time=15:00:00                                  # Time limit hrs:min:sec per task
+#SBATCH --exclude=node7,node9,node1,node13               # Exclude problematic nodes
+# #SBATCH --constraint="GPU_MODEL:a40"                   # Ensure specific GPU model if available
+#SBATCH --output=logs/slurm_logs/finsler-%j.out          # Standard output log
+#SBATCH --error=logs/slurm_logs/finsler-%j.err           # Error log
 
 set -euo pipefail
 
@@ -20,29 +20,30 @@ conda activate BAU
 export PYTHONPATH=/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification
 
 # Base hyper-parameters (shared across jobs)
-ARCH=resnet50_finsler           # Changed to learnableOmega model
-BATCH_SIZE=256                  # Default
-LAM=1.5                         # Default
-KNN=10                          # Default
-ITERS=500                       # Default
-EPOCHS=60                       # Reduced from 60 to 20 for faster iteration and to fit within time limits
-# WARMUP_STEP=3                   # Proportionally scale warmup steps to 20 epochs (originally 10 for 60 epochs)
-# MILESTONES="10 15"              # Proportionally scale milestones to 20 epochs (originally 30 and 50 for 60 epochs)
-OMEGA_REG_WEIGHT=1.5            # New hyper-parameter for omega regularization weight
-DRIFT_METHOD=symmetric_trapezoidal    # Method for calculating the finsler distance [constant_drift, symmetric_trapezoidal, slerp, analytical]
-# SOURCE_DATASET="market1501 cuhksysu cuhk03"
-# TARGET_DATASET=msmt17
+ARCH=resnet50_finsler                   # Changed to learnableOmega model
+BATCH_SIZE=256                          # Default
+LAM=1.5                                 # Default
+KNN=10                                  # Default
+ITERS=500                               # Default
+EPOCHS=60                               # Default
+OMEGA_REG_WEIGHT=1.5                    # New hyper-parameter for omega regularization weight
+DRIFT_METHOD=symmetric_trapezoidal      # Method for calculating the finsler distance [constant_drift, symmetric_trapezoidal, slerp, analytical]
 SOURCE_DATASET="market1501 msmt17 cuhksysu"
 TARGET_DATASET=cuhk03
-DRT_CONDITIONING=instance       # How to condition the drift (instance-level, class-level, or global)
+DRT_CONDITIONING=instance                 # instance or domain
+SAMPLER="RandomIdentity"         # RandomIdentity, RandomMultipleGallery
+
+# -- Hot Swappable --
+# SOURCE_DATASET="market1501 cuhksysu cuhk03"
+# TARGET_DATASET=msmt17
 
 # Run Specific Tags
-WANDB_TAGS=(finsler "dt-${TARGET_DATASET}" "drift-condition-${DRT_CONDITIONING}" "drift-method-${DRIFT_METHOD}" FHSigGate BidirectTri "OmegaReg${OMEGA_REG_WEIGHT}" OrthoEnforced)
-RUN_NAME="FHSigGate_Drift${DRIFT_METHOD}_DriftCond${DRT_CONDITIONING}"
+WANDB_TAGS=(finsler "dt-${TARGET_DATASET}" "drift-condition-${DRT_CONDITIONING}" "drift-method-${DRIFT_METHOD}" "OmegaReg${OMEGA_REG_WEIGHT}" "Sampler-${SAMPLER}")
+RUN_NAME="DriftCond${DRT_CONDITIONING}_Sampler${SAMPLER}_IdentityJaccard_EuclideanUniform_BidirectionalTriplet"
 # RUN_NAME="FHSigGate+ModFinsDist_BidirectTri_OmegaReg${OMEGA_REG_WEIGHT}"
 
-LOGS_DIR="$(pwd)/logs/AGReIDv2_sweep/job_${SLURM_JOB_ID}_dt_${TARGET_DATASET}_${RUN_NAME}"
-WANDB_NAME="learnableOmega_dt_${TARGET_DATASET}_${RUN_NAME}"
+LOGS_DIR="$(pwd)/logs/m-ms-cs_c3/job_${SLURM_JOB_ID}_${RUN_NAME}"
+WANDB_NAME="m-ms-cs_c3_${RUN_NAME}"
 echo "Starting finsler single experimentation"
 echo "Logs dir: ${LOGS_DIR}"
 
@@ -71,12 +72,13 @@ srun --unbuffered python "${SNAP_DIR}/examples/train_bau.py" \
   --verbosity 2 \
   --eval-drift false \
   --memory-bank-mode full \
-  --bidirectional-triplet \
   --drift-method "${DRIFT_METHOD}" \
   --use-omega-reg \
   --omega-reg-weight "${OMEGA_REG_WEIGHT}" \
   --drift-conditioning "${DRT_CONDITIONING}" \
-  --wandb-tags "${WANDB_TAGS[@]}"
+  --sampler "${SAMPLER}" \
+  --wandb-tags "${WANDB_TAGS[@]}" \
+  --bidirectional-triplet 
   # --use-drift-align \
   # --drift-dim 32 \
 

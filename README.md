@@ -176,6 +176,7 @@ Why this may help metrics:
 
 Compared with the original BAU parser, this fork exposes a much larger set of switches for attribution and ablation:
 
+- `--sampler` (choices: `RandomIdentity`, `RandomMultipleGallery`; recommended `RandomMultipleGallery` for Finsler/domain-conditioned runs; see Research Status Update below)
 - `--drift-method`
 - `--drift-dim`
 - `--memory-bank-mode`
@@ -297,6 +298,7 @@ python examples/train_bau.py \
 
 | Flag | Default | Meaning |
 |------|---------|---------|
+| `--sampler` | `RandomIdentity` | training batch sampler; use `RandomMultipleGallery` for cross-camera positive pairs (recommended for Finsler pivot) |
 | `--drift-method` | `symmetric_trapezoidal` | asymmetry integration rule used by evaluator / non-triplet losses |
 | `--drift-dim` | `2048` | drift branch dimensionality |
 | `--eval-drift` | `true` | use full `[identity|drift]` embedding at evaluation |
@@ -405,6 +407,23 @@ The safest validation path is:
 
 This makes the next phase of the project less risky: even if the new drift formulation does not improve mAP materially, it can still clarify whether asymmetry is a useful **structured nuisance factor** rather than a direct accuracy booster.
 
+### Training batch sampler: RandomMultipleGallerySampler
+
+The repository supports two training samplers: `RandomIdentitySampler` (standard P×K sampling over identities and instances, agnostic to camera) and `RandomMultipleGallerySampler`, which enforces that the K instances per identity in each batch are drawn from K **distinct cameras** when the identity appears in at least K cameras. With the former, positive pairs can often come from the same camera, allowing the model to exploit camera-specific shortcuts; with the latter, positive pairs are explicitly cross-camera, so alignment and triplet losses are optimized for view-invariant features.
+
+An A/B test on the Euclidean BAU baseline (same setup: Market1501 + MSMT17 + CUHK-SYSU → CUHK03-NP, 60 epochs) compared the two samplers. Enforcing cross-camera positives (`RandomMultipleGallerySampler`) yielded consistent improvements on the unseen target:
+
+| Metric | RandomIdentitySampler | RandomMultipleGallerySampler | Δ |
+|--------|------------------------|------------------------------|---|
+| mAP    | 42.2%                 | 43.3%                        | +1.1 |
+| Rank-1 | 42.5%                 | 43.0%                        | +0.5 |
+| Rank-5 | 62.1%                 | 63.4%                        | +1.3 |
+| Rank-10| 71.8%                 | 73.5%                        | +1.7 |
+
+**Decision:** For the forthcoming Finsler and domain-conditioned drift experiments, training should use **RandomMultipleGallerySampler** (`--sampler RandomMultipleGallery`). The cross-camera constraint mitigates camera-specific overfitting and supplies the batch structure needed for the asymmetric distance to receive meaningful gradient signal across views. This choice is consistent with the pivot to per-domain/per-camera asymmetry: the drift branch is intended to model view-level bias, which requires positive pairs that span different cameras.
+
+Caveats: the comparison used a single seed and a single target (CUHK03-NP); the gains are moderate and not subjected to significance testing. The default in code remains `RandomIdentity` for backward compatibility; launch scripts and ablations for the Finsler pivot should set `--sampler RandomMultipleGallery` explicitly.
+
 ### Domain-conditioned drift head: architecture and evaluation prior
 
 The new `DomainConditionedDriftHead` is meant to answer a very specific question:
@@ -499,6 +518,15 @@ flowchart LR
      X --> Ldom[Domain loss]
      E --> Lalign[Alignment loss on identity slice]
 ```
+
+#### Architecture diagram errata (vs external diagram)
+
+If an external block diagram exists for this architecture, verify these dimensions against the code:
+
+1. **Domain gate:** `nn.Linear(identity_dim, drift_dim, bias=False)` — when `drift_dim=2048` (default) this is `2048 → 2048`, not `2048 → 1024`.
+2. **Domain classifier:** `nn.Linear(identity_dim, num_domains)` — outputs `num_domains` logits (e.g. 3), not 64. The 64-d value is `context_dim` for the domain embedding table, a separate path.
+3. **Drift head input:** `DomainConditionedDriftHead.forward` receives pre-BN pooled features `emb`, not BN-neck identity features. See `model.py` line 357.
+4. **L_p normalisation:** The identity normalization is L2 (`F.normalize` with `p=2`), not generic L_p.
 
 #### Loss connections in the current implementation
 

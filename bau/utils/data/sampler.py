@@ -111,7 +111,7 @@ class RandomMultipleGallerySampler(Sampler):
         for kid in indices:
             i = random.choice(self.pid_index[self.pids[kid]])
 
-            _, i_pid, i_cam = self.data_source[i]
+            _, i_pid, i_cam, _ = self.data_source[i]
 
             ret.append(i)
 

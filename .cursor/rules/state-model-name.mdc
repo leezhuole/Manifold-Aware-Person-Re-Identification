@@ -1,0 +1,18 @@
+---
+description: State which AI model is in use at the start of each response
+alwaysApply: true
+---
+
+# State Model Name First
+
+At the beginning of your answer, state which AI model is currently in use.
+
+- Mention only the model name (e.g., Claude Opus 4.6, GPT-4o, etc.).
+- Put it in the first sentence or line of your reply.
+- Then continue with the rest of your response as usual.
+
+Example:
+
+```
+Claude Opus 4.6. Here’s how to fix that...
+```
