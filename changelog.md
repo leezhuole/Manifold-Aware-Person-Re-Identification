@@ -1,5 +1,246 @@
 # Changelog
 
+## [2026-03-30] - Metrics markdown: `sweep_unified_finsler_idea1_gap` (job 1516604)
+**Files Created:** `results/sweep_unified_finsler_idea1_gap_metrics.md`
+
+### Problem Addressed
+Final **mAP** / **Rank-1** from `logs/sweep_unified_finsler_idea1_gap/` needed collation for the paper table (1b row + Unified Finsler Euc. Dom. columns).
+
+### Modification
+Parsed each `log.txt` at **best-model final evaluation**; documented copy-paste markdown tables and log path index.
+
+### Expected Behavior
+Single place to pull numbers for job 1516604 gap sweep runs.
+
+**Timestamp:** 2026-03-30
+
+## [2026-03-30] - Sbatch: Idea-1 gap — W&B name, `--no-triplet` for domain-triplet arm
+**Files Modified:** `sbatch/sweep_unified_finsler_idea1_gap.sbatch`
+
+### Problem Addressed
+1. **`WANDB_NAME=gapUnifiedFin_*`** implied every array task used a unified Finsler PID triplet; **ARM=0** is domain-triplet-only.  
+2. **`--use-domain-triplet` without `--no-triplet`** stacks `loss_tri_dom` on top of the main PID triplet (`bau/trainers.py` sums both), so Idea **1a**-style or unified PID triplet was never “replaced” by domain triplet alone.
+
+### Modification
+- **`WANDB_NAME` → `idea1Gap_${RUN_NAME}`**; first W&B tag **`sweep-idea1-gap`**; Slurm **`#SBATCH --job-name=idea1-gap`**, stdout/stderr **`idea1-gap-%A_%a.*`**.
+- **ARM=0:** prepend **`--no-triplet`** to the existing `--use-domain-triplet` block so **`loss_tri` is disabled** and the only `TripletLoss`-derived term in the total loss is **`loss_tri_dom`**.
+- Header comment documents the stack vs replace behavior.
+
+### Expected Behavior
+Domain-triplet-only tasks train without PID batch-hard triplet; unified-Finsler tasks unchanged. W&B run names no longer overstate “unified Finsler” for the domain-triplet arm.
+
+**Timestamp:** 2026-03-30
+
+## [2026-03-30] - Sbatch: unified Finsler Idea-1 gap sweep (8 tasks)
+**Files Created:** `sbatch/sweep_unified_finsler_idea1_gap.sbatch`
+
+### Problem Addressed
+Metric table had empty cells for **Idea 1b-only** and **unified Finsler** rows across instance/domain drift conditioning and Finsler vs Euclidean `L_domain`, which are not covered by the existing Idea-1 sweeps (those fix `--identity-triplet-only` and extensions use `--bidirectional-triplet`).
+
+### Modification
+- **`#SBATCH --array=0-7`** with `COND = TASK_ID % 2`, `L_DOM_KIND = (TASK_ID / 2) % 2`, `ARM = TASK_ID / 4`.
+- **`ARM == 0`**: `--use-cross-domain-contrastive` (camera nuisance, `XDOM_W=0.1`) — refined 1b **without** separate Euclidean identity triplet.
+- **`ARM == 1`**: no cross-domain contrastive — pure unified Finsler main triplet + BAU stack.
+- **`L_DOM_KIND == 0`**: `--memory-bank-mode full`, `--use-omega-reg --omega-reg-weight 1.5` (same as Finsler-domain Idea-1 sweep).
+- **`L_DOM_KIND == 1`**: `--use-euclidean-domain-loss` + identity memory bank (same as EuclideanDom sweep).
+- **Explicitly omitted** from all tasks: `--identity-triplet-only`, `--bidirectional-triplet`.
+- Logs under `logs/sweep_unified_finsler_idea1_gap/`; Slurm stdout/stderr under `logs/slurm_logs/unified-finsler-idea1-gap-*.out/.err`.
+
+### Expected Behavior
+`sbatch sbatch/sweep_unified_finsler_idea1_gap.sbatch` runs the eight configurations needed to fill the gap table; main triplet uses Finsler distance on the full `[identity|drift]` embedding.
+
+**Timestamp:** 2026-03-30
+
+## [2026-03-30] - EuclideanDom sweep metrics table (job 1514816)
+**Files Created:** `results/sweep_loss_ablation_Idea1_EuclideanDom_metrics.md`
+
+### Problem Addressed
+Final **mAP** and **Rank-1** from `logs/sweep_loss_ablation_Idea1_EuclideanDom/` needed collation for paper/slide tables.
+
+### Modification
+Parsed each `log.txt` at the **post–best-checkpoint** evaluation block; documented paths and a copy-paste markdown table (five arms × instance/domain).
+
+### Expected Behavior
+Single source of truth for Euclidean-domain-loss sweep numbers alongside Finsler-domain columns.
+
+**Timestamp:** 2026-03-30
+
+## [2026-03-24] - finsler_single_best_24_03: Protocol-2 array sweep (-ds/-dt)
+**Files Modified:** `finsler_single_best_24_03.sbatch`
+
+### Problem Addressed
+The single-job script only ran one BAU Protocol-2 split (`market1501 msmt17 cuhksysu` → `cuhk03`). Reproducing the full original BAU DG protocol requires the three source/target permutations from `old_bau/BAU/train.sh`.
+
+### Modification
+- **`#SBATCH --array=0-2`**: task `0`/`1`/`2` set `SOURCE_DATASET` and `TARGET_DATASET` to match the three `train.sh` lines (order preserved).
+- **Logs**: `logs/slurm_logs/finsler-p2-%A_%a.out` / `.err`; per-task `logs/Protocol-2/job_${SLURM_JOB_ID}_${RUN_NAME}` with `RUN_NAME` / W&B tags including `p2-split-${IDX}` and a short `PROTOCOL_TAG`.
+- **Hyperparameters**: unchanged from the previous single-run recipe (`ITERS=500` for all splits; original BAU used `--iters 200` only for the `msmt17` target — noted in script header).
+
+### Expected Behavior
+`sbatch finsler_single_best_24_03.sbatch` submits three independent training jobs with identical Finsler flags but different `-ds`/`-dt`.
+
+**Timestamp:** 2026-03-24
+
+## [2026-03-24] - Euclidean BAU-style domain loss toggle + Idea-1 EuclideanDom sweep
+**Files Modified:** `bau/trainers.py`, `examples/train_bau.py`  
+**Files Created:** `sbatch/sweep_loss_ablation_Idea1_EuclideanDom.sbatch`
+
+### Problem Addressed
+Ablations needed to turn **Finsler-style `L_domain`** (full embedding + model `dist_func`) **off** and restore **original BAU** Euclidean repulsion on **identity features** with an **identity-only memory bank**, via a single CLI flag.
+
+### Modification
+- **`--use-euclidean-domain-loss`**: requires `--arch resnet50_finsler`; forces `--memory-bank-mode identity`; centroid init slices extracted features to `memory_bank_dim` before mean/normalize.
+- **`BAUTrainer`**: `use_euclidean_domain_loss` uses `f_w_align`/`f_s_align` in `domain_loss`, sets `effective_dist_func = euclidean_dist` and `alpha = None`; `momentum_update` uses the identity slice when `memory_bank.num_features == identity_dim`.
+- **Sweep** `sweep_loss_ablation_Idea1_EuclideanDom.sbatch`: same 10-job factorial as `sweep_loss_ablation_Idea1_extensions.sbatch`, with `--use-euclidean-domain-loss` and **without** `--use-omega-reg` (avoids drift→identity gradient via orthogonalization in the drift head).
+
+### Expected Behavior
+Toggling the flag reproduces BAU’s `L_domain` geometry on the identity arm while keeping the Finsler backbone; new logs under `logs/sweep_loss_ablation_Idea1_EuclideanDom/`.
+
+**Timestamp:** 2026-03-24
+
+## [2026-03-23] - CSV: Idea-1 loss ablation metrics (job 1512947)
+**Files Created:** `results/sweep_loss_ablation_Idea1_metrics.csv`
+
+### Problem Addressed
+Sweep results needed a machine-readable, self-describing table for papers, slides, and spreadsheets.
+
+### Modification
+Added one row per configuration (5 arms × 2 drift conditionings) with `arm_id`, short name, `arm_detail`, `drift_conditioning`, `map_pct`, `rank1_pct`, shared protocol columns (sources, target, arch, sampler, key booleans, seed, epochs), SLURM `job_id`, and `notes`.
+
+### Expected Behavior
+Import into Excel/LaTeX/pandas without parsing log files.
+
+**Timestamp:** 2026-03-23
+
+## [2026-03-23] - Publication-style figure for Idea-1 loss ablation sweep
+**Files Created:** `scripts/plot_sweep_loss_ablation_idea1.py`; outputs `results/plots/sweep_loss_ablation_Idea1.pdf` and `.png` (300 DPI)
+
+### Problem Addressed
+Sweep metrics (job 1512947) needed a single, presentation-ready graphic with publication-style typography and a colorblind-safe palette.
+
+### Modification
+Added a matplotlib script: dual-panel grouped bar chart (mAP and Rank-1) for five loss arms × two drift conditionings (Okabe–Ito blue/orange), panel labels (a)/(b), methods footnote (protocol, single-seed caveat).
+
+### Expected Behavior
+`python scripts/plot_sweep_loss_ablation_idea1.py --output-dir results/plots` regenerates vector PDF and high-resolution PNG.
+
+**Timestamp:** 2026-03-23
+
+## [2026-03-23] - Plot script: portable fonts, SVG, PDF Type 42
+**Files Modified:** `scripts/plot_sweep_loss_ablation_idea1.py`
+
+### Problem Addressed
+Some environments could not open the first PDF/PNG reliably (missing Times fonts, PDF font embedding, transparency).
+
+### Modification
+Use **Agg** backend; **DejaVu Serif** + `mathtext.fontset=dejavuserif`; `pdf.fonttype=42`; opaque **white** `facecolor` on save; default export adds **SVG**; `--formats` flag; slightly larger figure.
+
+### Expected Behavior
+PNG/PDF/SVG regenerate consistently; SVG opens in browsers; PDF embeds TrueType for PowerPoint/Acrobat.
+
+**Timestamp:** 2026-03-23
+
+## [2026-03-23] - Analysis report: sweep_loss_ablation_Idea1 (job 1512947)
+**Files Created:** `changelogs/sweep_loss_ablation_Idea1_analysis_2026-03-23.md`
+
+### Problem Addressed
+The Idea‑1 loss ablation sweep (`sbatch/sweep_loss_ablation_Idea1_extensions.sbatch`, job `1512947`) completed; results needed consolidation against the meeting premise and README research narrative.
+
+### Modification
+Added a structured report: sweep aims, factorial design (5 arms × 2 drift conditionings), final mAP/Rank‑1 table from `logs/sweep_loss_ablation_Idea1/job_1512947_*/log.txt`, interpretation (baseline best; domain triplet harmful; refined contrastive slightly negative; drift‑only neutral), mermaid figures, literature references, and prioritized next experiments aligned with README (multi‑seed, dual eval with/without drift, toy corruptions, AG‑ReIDv2).
+
+### Expected Behavior
+Readers can cite one document for sweep conclusions and follow‑up work without re‑parsing raw logs.
+
+**Timestamp:** 2026-03-23
+
+## [2026-03-20] - ReNorm2 FinslerEmbeddingHead: identity_norm after BN neck (BAU parity)
+**Files Modified (ReNorm2):** `fastreid/modeling/heads/finsler_head.py`
+**Problem Addressed:** `identity_norm` was `F.normalize(global_feat)` instead of `F.normalize(bn_neck(global_feat))`, diverging from `resnet50_finsler` in `bau/models/model.py` (lines 336–337).
+**Expected Behavior:** Finsler identity slice and orthogonalization match BAU; drift head input remains pre-BN pooled features.
+
+**Timestamp:** 2026-03-20
+
+## [2026-03-21] - Extend loss-ablation sbatch: drift conditioning × 5 arms + dom-triplet with L_domain
+**Files Modified:** `sbatch/sweep_loss_ablation_Idea1_extensions.sbatch`
+
+### Problem Addressed
+Ablation needed **instance vs domain** drift conditioning for every loss arm, plus a **domain-triplet run with BAU `L_domain` enabled** (no `--no-domain`) to observe explicit conflict with same-nuisance attraction.
+
+### Modification
+Array expanded to **0–9**: `EXP = TASK_ID / 2` in {0..4}, `COND = TASK_ID % 2` → **instance** vs **domain** `--drift-conditioning`. **EXP=4** duplicates domain triplet but **omits `--no-domain`**. Run names include `driftInst` / `driftDom`; **EXP=4** uses `withLdom` in the name.
+
+### Expected Behavior
+Ten jobs; compare within same `EXP` across `driftInst`/`driftDom`, and **EXP=2 vs EXP=4** for domain triplet with vs without memory domain loss.
+
+**Timestamp:** 2026-03-21
+
+## [2026-03-21] - SLURM array: loss ablation for Idea-1 extensions (intuition sweep)
+**Files Created:** `sbatch/sweep_loss_ablation_Idea1_extensions.sbatch`
+
+### Problem Addressed
+Multiple optional losses (camera-nuisance refined contrastive, Finsler domain triplet, drift-only cross-camera L2) needed isolated A/B/C comparison on a fixed Finsler+1a recipe without per-method hyperparameter sweeps.
+
+### Modification
+Added SLURM array **0–3**: (0) **1a-only baseline**, (1) **camera `cross-domain-contrastive-nuisance` + `use-cross-domain-contrastive`**, (2) **`use-domain-triplet` with camera mining + `--no-domain`** to limit gradient conflict with BAU domain loss, (3) **`use-drift-only-cross-contrastive`**. Shared settings mirror `finsler_single_learnableOmega.sbatch` (RMGS, omega reg, instance drift, bidirectional triplet). Resources set to **32G VRAM / 32G RAM / 6 CPUs** for headroom over the prior 28G recipe; single forward per step (no domain-balanced second loader).
+
+### Expected Behavior
+`sbatch sbatch/sweep_loss_ablation_Idea1_extensions.sbatch` submits four comparable runs; W&B tags `sweep-loss-ablate` plus arm-specific tags. Interpret mAP with the caveat that arm 2 disables `L_domain` by design.
+
+**Timestamp:** 2026-03-21
+
+## [2026-03-21] - Camera nuisance labels, Finsler domain triplet, drift-only contrastive, domain-balanced loader
+**Files Modified:** `bau/utils/data/preprocessor.py`, `bau/utils/data/sampler.py`, `bau/trainers.py`, `examples/train_bau.py`, `README.md`
+
+### Problem Addressed
+Refined 1b contrastive used merged **dataset** id (`did`), so no same-PID cross-dataset pairs exist in multi-source DG. Original meeting **domain triplet (1b)** was not implemented. Optional **domain-balanced** batches and **drift-only** cross-camera supervision were needed for experiments.
+
+### Modification
+1. **`TwoViewPreprocessor`:** Returns **`(img_w, img_s, pid, did, cid)`** for two-view training; supports **3-tuple** train rows with **`did=0`**. Memory-init single-view path unchanged **`(img, fname, pid, cid)`**.
+2. **`BAUTrainer`:** Parses **`cids`**; **`cross_domain_finsler_contrastive_loss`** takes generic **nuisance** labels; **`contrastive_nuisance`** `dataset|camera` selects **`dids` vs `cids`**. **`--use-domain-triplet`** adds second **`TripletLoss`** on **`f_w`** with batch-hard on **`--domain-triplet-mining-label`** (`camera`|`dataset`). Optional **`domain_triplet_loader`**: second forward on domain-balanced batch only for **`loss_tri_dom`**. **`drift_only_cross_camera_contrastive_loss`**: mean **L2²** on drift for **same PID, different `cid`**. W&B: **`train/loss_tri_dom`**, **`train/loss_drift_xcontrast`**; console **L_TriDom**, **L_DriftX**.
+3. **`RandomDomainBalancedSampler`:** Groups by **camera** or **dataset**; **`get_domain_balanced_train_loader`** mirrors train augmentations. **`--use-domain-balanced-second-loader`** requires **`--use-domain-triplet`**.
+4. **CLI:** **`--cross-domain-contrastive-nuisance`**, **`--use-domain-triplet`**, **`--domain-triplet-weight`**, **`--domain-triplet-margin`**, **`--domain-triplet-mining-label`**, **`--use-domain-balanced-second-loader`**, **`--domain-balanced-batch-size`**, **`--domain-balanced-instances-per-group`**, **`--use-drift-only-cross-contrastive`**, **`--drift-only-cross-contrastive-weight`**.
+
+### Expected Behavior
+- **`--cross-domain-contrastive-nuisance camera`** + **`--use-cross-domain-contrastive`**: signal on **same person, different camera** (merged global **`cid`**).
+- **Domain triplet** intentionally **conflicts** with memory-based **`L_domain`** (same-nuisance attraction vs repulsion); use **`--no-domain`** or accept ablation.
+- **`model(..., domain_ids=...)`** still uses **dataset** `did` only; domain-conditioned **`num_domains`** unchanged.
+
+**Timestamp:** 2026-03-21
+
+## [2026-03-20] - SBATCH: Idea 1a+1b learnable-omega Finsler job recipe
+**Files Modified:** `finsler_single_learnableOmega.sbatch`
+
+### Problem Addressed
+Cluster launch script did not enable the new Idea 1 training flags or the sampler layout that yields cross-domain same-identity pairs for the contrastive term.
+
+### Modification
+Set default `SAMPLER` to `RandomMultipleGallery`; added `CROSS_DOMAIN_CONTRAST_WEIGHT=0.1`; passed `--identity-triplet-only`, `--use-cross-domain-contrastive`, and `--cross-domain-contrastive-weight` into `train_bau.py`; updated `WANDB_TAGS` and `RUN_NAME` to mark Idea 1a/1b runs.
+
+### Expected Behavior
+`sbatch finsler_single_learnableOmega.sbatch` runs the previous Omega-reg + bidirectional Finsler setup with Euclidean identity-only triplet and weighted cross-domain same-ID contrastive loss; W&B tags distinguish these experiments.
+
+**Timestamp:** 2026-03-20
+
+## [2026-03-20] - Idea 1: Euclidean identity triplet + cross-domain Finsler contrastive
+**Files Modified:** `bau/trainers.py`, `examples/train_bau.py`
+
+### Problem Addressed
+Supervisor meeting Idea 1 called for separating identity-level metric learning (Euclidean on identity features) from asymmetric domain-aware geometry, and for a refined supplementary loss that pulls same-identity cross-domain pairs together under the model distance \(d_F\) without a new sampler.
+
+### Modification
+1. **`BAUTrainer` / triplet (1a):** Added `identity_triplet_only`. When True, `TripletLoss` uses `euclidean_dist` with no alpha, and the forward pass slices `emb_w[:, :identity_dim]` for Finsler models so `euclidean_dist` does not apply the legacy last-dimension alpha hack.
+2. **`BAUTrainer` / contrastive (refined 1b):** Added `use_cross_domain_contrastive` and `cross_domain_contrastive_weight`. New method `cross_domain_finsler_contrastive_loss(f_w, pids, dids, alpha)` minimizes mean \(d(\mathbf{z}_i,\mathbf{z}_j)^2\) over pairs with the same PID and different source-domain IDs; uses `self.dist_func` (Finsler or Euclidean). Returns 0 if no such pairs exist in the batch.
+3. **Logging:** AverageMeter, total loss, W&B key `train/loss_xdom_contrast`, and console `L_XDom`. `train/loss_total` now matches the backward sum including `lam * (align + drift_align)` and the new term.
+4. **CLI:** `--identity-triplet-only`, `--use-cross-domain-contrastive`, `--cross-domain-contrastive-weight` (default `0.1`).
+
+### Expected Behavior
+- With `--identity-triplet-only` on `resnet50_finsler`, triplet mining is Euclidean on the identity slice only; domain/triplet geometry conflict for ID is reduced.
+- With `--use-cross-domain-contrastive`, training adds weighted contrastive pressure on same-ID cross-source pairs in the weak view; signal is strongest when batches contain such pairs (e.g. `--sampler RandomMultipleGallery`).
+- W&B step logs include `train/loss_xdom_contrast` when the flag is on (zero line when off).
+
+**Timestamp:** 2026-03-20 (implementation per approved plan)
+
 ## [2026-03-20] - Supervisor meeting: loss signal separation and toy dataset proposal
 **Files Created:** `changelogs/supervisor_meeting_20_03.md`
 
@@ -228,3 +469,21 @@ The `slerp` and `analytical` drift penalties should now remain numerically stabl
 - **Problem**: Baseline (Euclidean/non-Finsler) models do not expect `domain_ids` in their forward signature, causing training loops with Euclidean baselines to crash when explicitly passing it.
 - **Expected Behavior**: `BAUTrainer` dynamically inspects the inner module's forward method. It only passes `domain_ids=domain_ids` when the backbone actively declares it as a valid kwarg, preventing unexpected keyword crashes for legacy model variations.
 - **Timestamp**: 2026-03-16 17:17:45
+
+## [2026-04-01 00:00:00 UTC] - Write comprehensive analysis of Idea 1 loss ablations
+**Files Modified:** `results/Idea1_Ablation_Comprehensive_Analysis.md` (created)
+**Functions Altered:** N/A (analysis markdown created)
+
+### Problem Addressed
+The user needed an academically rigorous, impartial analysis of the consolidated sweep results for the "Idea 1" loss ablations in the asymmetric Finsler Domain Generalizable Re-ID framework. This analysis needed to cover the performance of the baseline vs. unified Finsler, the catastrophic failure of explicit domain clustering (domain triplet 1b), the superiority of Finsler over Euclidean domain memory banks, and the impact of auxiliary constraints.
+
+### Modification
+Created `results/Idea1_Ablation_Comprehensive_Analysis.md` containing a detailed discussion of the ablation results, backed by relevant CV literature (Jia et al., Zhou et al., Wang & Isola, Chen & He) and framed from the perspective of a senior CV research scientist.
+
+### Expected Behavior
+The new markdown file provides a clear, theory-grounded explanation of why explicit domain clustering harms DG-ReID, why the unified asymmetric Finsler manifold performs optimally without explicit disentanglement, and why over-constraining drift vectors degrades performance. This document will serve as a foundational reference for the theoretical narrative of the paper/research direction.
+
+### 2026-03-24 10:00:00
+*   **Modifications:** Created a new markdown document at `bau/docs/finsler_disentanglement_analysis.md`.
+*   **Problem:** The theoretical viability, utility of the drift vector during retrieval, and experimental roadmap for Finsler asymmetry in DG-ReID needed to be clearly structured, consolidated, and documented following an in-depth analytical discussion. 
+*   **Expected Behavior:** Researchers and collaborators can now reference `bau/docs/finsler_disentanglement_analysis.md` for a complete, exhaustive summary of the "representation disentanglement" paradigm, the resolution of the `--eval-drift` misconception, and the concrete 3-phase experimental roadmap (Toy Dataset -> Disentanglement Validation -> Asymmetric Eval Activation) moving forward.

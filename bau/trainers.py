@@ -26,7 +26,13 @@ class BAUTrainer(object):
     def __init__(self, model, memory_bank, num_classes, margin, lam=1.5, k=10, manifold=None, manifold_chunk_size=None,
                  use_aug_ce=False, use_align=True, use_drift_align=False, use_uniform=True, use_domain=True, use_triplet=True, 
                  use_ce=True, alpha=None, alpha_module=None, bidirectional_triplet=False,
-                 use_omega_reg=False, omega_reg_weight=1.0, domain_token_loss_weight=0.0):
+                 use_omega_reg=False, omega_reg_weight=1.0, domain_token_loss_weight=0.0,
+                 identity_triplet_only=False, use_cross_domain_contrastive=False, cross_domain_contrastive_weight=0.1,
+                 contrastive_nuisance='dataset',
+                 use_domain_triplet=False, domain_triplet_weight=1.0, domain_triplet_margin=None,
+                 domain_triplet_mining_label='camera',
+                 use_drift_only_cross_contrastive=False, drift_only_cross_contrastive_weight=0.1,
+                 use_euclidean_domain_loss=False):
         
         """
         Note that static alpha is not used during training. It is only set as a default when no alpha_module is provided
@@ -43,11 +49,14 @@ class BAUTrainer(object):
         self.criterion_ce = CrossEntropyLabelSmooth(num_classes=num_classes).cuda()
         self.criterion_domain_token = nn.CrossEntropyLoss().cuda()
         static_alpha = None if alpha_module is not None else alpha
+        self.identity_triplet_only = identity_triplet_only
+        tri_dist_func = euclidean_dist if identity_triplet_only else self.dist_func
+        tri_criterion_alpha = None if identity_triplet_only else static_alpha
         self.criterion_tri = TripletLoss(
             margin=margin,
             manifold=manifold,
-            alpha=static_alpha,
-            dist_func=self.dist_func,
+            alpha=tri_criterion_alpha,
+            dist_func=tri_dist_func,
             bidirectional=bidirectional_triplet,
         ).cuda()
         self.scaler = GradScaler()
@@ -67,6 +76,34 @@ class BAUTrainer(object):
         self.use_omega_reg = use_omega_reg
         self.omega_reg_weight = omega_reg_weight
         self.domain_token_loss_weight = domain_token_loss_weight
+        self.use_cross_domain_contrastive = use_cross_domain_contrastive
+        self.cross_domain_contrastive_weight = cross_domain_contrastive_weight
+        if contrastive_nuisance not in ('dataset', 'camera'):
+            raise ValueError("contrastive_nuisance must be 'dataset' or 'camera'")
+        self.contrastive_nuisance = contrastive_nuisance
+
+        self.use_domain_triplet = use_domain_triplet
+        self.domain_triplet_weight = domain_triplet_weight
+        self.domain_triplet_mining_label = domain_triplet_mining_label
+        if domain_triplet_mining_label not in ('dataset', 'camera'):
+            raise ValueError("domain_triplet_mining_label must be 'dataset' or 'camera'")
+        dom_margin = domain_triplet_margin if domain_triplet_margin is not None else margin
+        dom_tri_alpha = None if alpha_module is not None else alpha
+        self.criterion_tri_domain = (
+            TripletLoss(
+                margin=dom_margin,
+                manifold=manifold,
+                alpha=dom_tri_alpha,
+                dist_func=self.dist_func,
+                bidirectional=False,
+            ).cuda()
+            if use_domain_triplet
+            else None
+        )
+
+        self.use_drift_only_cross_contrastive = use_drift_only_cross_contrastive
+        self.drift_only_cross_contrastive_weight = drift_only_cross_contrastive_weight
+        self.use_euclidean_domain_loss = use_euclidean_domain_loss
 
         # Finsler space parameter
         self.alpha = alpha
@@ -77,7 +114,7 @@ class BAUTrainer(object):
             return self.alpha
         return self.alpha_module.value()
 
-    def train(self, epoch, train_loader, optimizer, iters, print_freq=1):
+    def train(self, epoch, train_loader, optimizer, iters, print_freq=1, domain_triplet_loader=None):
         self.model.train()
 
         batch_time = AverageMeter()
@@ -89,6 +126,9 @@ class BAUTrainer(object):
         losses_domain = AverageMeter()
         losses_domain_token = AverageMeter()
         losses_omega = AverageMeter()
+        losses_xdom_contrast = AverageMeter()
+        losses_tri_dom = AverageMeter()
+        losses_drift_xcontrast = AverageMeter()
         precisions = AverageMeter()
 
         time.sleep(1)
@@ -97,7 +137,7 @@ class BAUTrainer(object):
             batch_data = train_loader.next()
             # inputs_w: Weakly augmented images
             # inputs_s: Strongly augmented images
-            inputs_w, inputs_s, pids, dids = self._parse_data(batch_data)
+            inputs_w, inputs_s, pids, dids, cids = self._parse_data(batch_data)
             
             optimizer.zero_grad()
             with autocast(device_type='cuda'):
@@ -188,7 +228,16 @@ class BAUTrainer(object):
                 
                 alpha_value = self._get_alpha_value()
 
-                loss_tri = self.criterion_tri(emb_w, pids, alpha=alpha_value) if self.use_triplet else torch.tensor(0.0).cuda()
+                if self.use_triplet:
+                    if self.identity_triplet_only and self.identity_dim is not None:
+                        tri_emb = emb_w[:, : self.identity_dim]
+                        tri_alpha = None
+                    else:
+                        tri_emb = emb_w
+                        tri_alpha = alpha_value
+                    loss_tri = self.criterion_tri(tri_emb, pids, alpha=tri_alpha)
+                else:
+                    loss_tri = torch.tensor(0.0).cuda()
 
                 loss_align = self.align_loss(f_w_align, f_s_align, pids, weight, alpha_value) if self.use_align else torch.tensor(0.0).cuda()
                 loss_drift_align = torch.tensor(0.0).cuda()
@@ -202,8 +251,9 @@ class BAUTrainer(object):
                 
                 loss_uniform = 0.5*(self.uniform_loss(f_w_align) + self.uniform_loss(f_s_align)) if self.use_uniform else torch.tensor(0.0).cuda()
                 
-                loss_domain = 0.5*(self.domain_loss(f_w, self.memory_bank.features, dids, alpha_value) +
-                                   self.domain_loss(f_s, self.memory_bank.features, dids, alpha_value)) if self.use_domain else torch.tensor(0.0).cuda()
+                f_w_dom, f_s_dom = (f_w_align, f_s_align) if self.use_euclidean_domain_loss else (f_w, f_s)
+                loss_domain = 0.5*(self.domain_loss(f_w_dom, self.memory_bank.features, dids, alpha_value) +
+                                   self.domain_loss(f_s_dom, self.memory_bank.features, dids, alpha_value)) if self.use_domain else torch.tensor(0.0).cuda()
 
                 if self.use_omega_reg and f_w_drift is not None and f_s_drift is not None:
                     loss_omega = self.omega_reg_weight * 0.5 * (self.omega_loss(f_w_drift) + self.omega_loss(f_s_drift))
@@ -215,10 +265,62 @@ class BAUTrainer(object):
                 else:
                     loss_domain_token = torch.tensor(0.0, device=f.device)
 
+                contrastive_nuisance = cids if self.contrastive_nuisance == 'camera' else dids
+                if self.use_cross_domain_contrastive:
+                    loss_xdom_contrast = self.cross_domain_contrastive_weight * self.cross_domain_finsler_contrastive_loss(
+                        f_w, pids, contrastive_nuisance, alpha_value
+                    )
+                else:
+                    loss_xdom_contrast = torch.tensor(0.0, device=f.device)
+
+                if self.use_drift_only_cross_contrastive and f_w_drift is not None:
+                    loss_drift_xcontrast = self.drift_only_cross_contrastive_weight * self.drift_only_cross_camera_contrastive_loss(
+                        f_w_drift, pids, cids
+                    )
+                else:
+                    loss_drift_xcontrast = torch.tensor(0.0, device=f.device)
+
+                if self.use_domain_triplet and self.criterion_tri_domain is not None:
+                    if domain_triplet_loader is not None:
+                        dom_batch = domain_triplet_loader.next()
+                        dw, ds, _p_d, d_d, c_d = self._parse_data(dom_batch)
+                        inp_d = torch.cat([dw, ds], dim=0)
+                        dom_ids_d = torch.cat([d_d, d_d], dim=0)
+                        if self.takes_domain_ids:
+                            out_d = self.model(inp_d, domain_ids=dom_ids_d)
+                        else:
+                            out_d = self.model(inp_d)
+                        if isinstance(out_d, tuple) and len(out_d) == 4:
+                            _emb_d, f_d, _logits_d, _aux = out_d
+                        else:
+                            _emb_d, f_d, _logits_d = out_d
+                        f_w_d = f_d.chunk(2)[0]
+                        dom_mining = c_d if self.domain_triplet_mining_label == 'camera' else d_d
+                        loss_tri_dom = self.domain_triplet_weight * self.criterion_tri_domain(
+                            f_w_d, dom_mining, alpha=alpha_value
+                        )
+                    else:
+                        dom_mining = cids if self.domain_triplet_mining_label == 'camera' else dids
+                        loss_tri_dom = self.domain_triplet_weight * self.criterion_tri_domain(
+                            f_w, dom_mining, alpha=alpha_value
+                        )
+                else:
+                    loss_tri_dom = torch.tensor(0.0, device=f.device)
+
                 with torch.no_grad():
-                    self.memory_bank.momentum_update(f_w, pids)
+                    f_mem = f_w
+                    if (
+                        self.identity_dim is not None
+                        and self.memory_bank.num_features == self.identity_dim
+                    ):
+                        f_mem = f_w_align
+                    self.memory_bank.momentum_update(f_mem, pids)
                     
-                loss = loss_ce + loss_tri + self.lam * total_align + loss_uniform + loss_domain + loss_omega + loss_domain_token
+                loss = (
+                    loss_ce + loss_tri + self.lam * total_align + loss_uniform + loss_domain
+                    + loss_omega + loss_domain_token + loss_xdom_contrast
+                    + loss_drift_xcontrast + loss_tri_dom
+                )
 
             if torch.isnan(loss):  # early exit if instability appears
                 msg = f"NaN loss detected at epoch {epoch}, iter {i}"
@@ -250,6 +352,9 @@ class BAUTrainer(object):
             losses_domain.update(loss_domain.item())
             losses_domain_token.update(loss_domain_token.item())
             losses_omega.update(loss_omega.item())
+            losses_xdom_contrast.update(loss_xdom_contrast.item())
+            losses_tri_dom.update(loss_tri_dom.item())
+            losses_drift_xcontrast.update(loss_drift_xcontrast.item())
             precisions.update(prec[0])
 
             batch_time.update(time.time() - end)
@@ -270,7 +375,21 @@ class BAUTrainer(object):
                         'train/loss_domain': losses_domain.val,
                         'train/loss_domain_token': losses_domain_token.val,
                         'train/loss_omega': losses_omega.val,
-                        'train/loss_total': (losses_ce.val + losses_tri.val + self.lam * losses_align.val + losses_uniform.val + losses_domain.val + losses_domain_token.val + losses_omega.val),
+                        'train/loss_xdom_contrast': losses_xdom_contrast.val,
+                        'train/loss_tri_dom': losses_tri_dom.val,
+                        'train/loss_drift_xcontrast': losses_drift_xcontrast.val,
+                        'train/loss_total': (
+                            losses_ce.val
+                            + losses_tri.val
+                            + self.lam * (losses_align.val + losses_drift_align.val)
+                            + losses_uniform.val
+                            + losses_domain.val
+                            + losses_domain_token.val
+                            + losses_omega.val
+                            + losses_xdom_contrast.val
+                            + losses_drift_xcontrast.val
+                            + losses_tri_dom.val
+                        ),
                         'train/precision': precisions.val / 100.0 if precisions.val > 1 else precisions.val,  # ensure fraction
                         'time/batch_sec': batch_time.val,
                         'lr': current_lr,
@@ -292,13 +411,26 @@ class BAUTrainer(object):
                       f' L_Uniform: {losses_uniform.val:.3f} ({losses_uniform.avg:.3f})  '
                       f' L_DTok: {losses_domain_token.val:.3f} ({losses_domain_token.avg:.3f})  '
                       f' L_Omega: {losses_omega.val:.3f} ({losses_omega.avg:.3f})  '
+                      f' L_XDom: {losses_xdom_contrast.val:.3f} ({losses_xdom_contrast.avg:.3f})  '
+                      f' L_TriDom: {losses_tri_dom.val:.3f} ({losses_tri_dom.avg:.3f})  '
+                      f' L_DriftX: {losses_drift_xcontrast.val:.3f} ({losses_drift_xcontrast.avg:.3f})  '
                       f' L_Domain: {losses_domain.val:.3f} ({losses_domain.avg:.3f})  '
                       f' Prec: {precisions.val:.2%} ({precisions.avg:.2%})')
                 torch.cuda.empty_cache()
 
     def _parse_data(self, data):
-        imgs_w, imgs_s, pids, dids, = data
-        return imgs_w.cuda(), imgs_s.cuda(), pids.cuda(), dids.cuda()
+        if len(data) == 5:
+            imgs_w, imgs_s, pids, dids, cids = data
+        else:
+            imgs_w, imgs_s, pids, dids = data
+            cids = pids.new_zeros(pids.shape)
+        return (
+            imgs_w.cuda(),
+            imgs_s.cuda(),
+            pids.cuda(),
+            dids.cuda(),
+            cids.cuda(),
+        )
     
     def align_loss(self, f_w, f_s, y, w, alpha=None):
 
@@ -349,18 +481,47 @@ class BAUTrainer(object):
             raise ValueError("Invalid manifold configuration for uniform loss.")
         return u_loss
 
+    def cross_domain_finsler_contrastive_loss(self, f, pids, nuisance_labels, alpha=None):
+        """Mean squared model distance for same-identity, different-nuisance-label pairs (weak view)."""
+        pid_eq = torch.eq(pids.unsqueeze(0), pids.unsqueeze(1))
+        nuis_neq = ~torch.eq(
+            nuisance_labels.unsqueeze(0), nuisance_labels.unsqueeze(1)
+        )
+        mask = pid_eq & nuis_neq
+
+        if mask.sum() == 0:
+            return torch.tensor(0.0, device=f.device)
+
+        dist = self.dist_func(f, f, alpha)
+        return dist[mask].pow(2).mean()
+
+    def drift_only_cross_camera_contrastive_loss(self, drift_w, pids, cids):
+        """L2^2 on drift for same PID, different global camera id (weak view)."""
+        pid_eq = torch.eq(pids.unsqueeze(0), pids.unsqueeze(1))
+        cam_neq = ~torch.eq(cids.unsqueeze(0), cids.unsqueeze(1))
+        mask = pid_eq & cam_neq
+        if mask.sum() == 0:
+            return torch.tensor(0.0, device=drift_w.device)
+        diff = drift_w.unsqueeze(0) - drift_w.unsqueeze(1)
+        dist_sq = diff.pow(2).sum(dim=-1)
+        return dist_sq[mask].mean()
+
     def domain_loss(self, f, c, dids, alpha=None):
         m, n = f.size(0), c.size(0)
-        
-        # Set distance function to Euclidean and disable alpha
-        # effective_dist_func = euclidean_dist
-        # alpha = None  # alpha is meaningless on identity-only features
-        
-        effective_dist_func = self.dist_func
-        # For Finsler models with concatenated [identity|drift], use the full
-        # embedding so the asymmetric drift contributes to the domain repulsion.
-        if self.identity_dim is not None and effective_dist_func is finsler_drift_dist and f.size(1) <= self.identity_dim:
+
+        if self.use_euclidean_domain_loss:
             effective_dist_func = euclidean_dist
+            alpha = None
+        else:
+            effective_dist_func = self.dist_func
+            # For Finsler models with concatenated [identity|drift], use the full
+            # embedding so the asymmetric drift contributes to the domain repulsion.
+            if (
+                self.identity_dim is not None
+                and effective_dist_func is finsler_drift_dist
+                and f.size(1) <= self.identity_dim
+            ):
+                effective_dist_func = euclidean_dist
 
         # Case 2: Finsler spaces and Euclidean Manifold
         if self.manifold is None:

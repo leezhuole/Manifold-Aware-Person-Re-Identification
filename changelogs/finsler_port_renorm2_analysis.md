@@ -143,13 +143,13 @@ class FinslerDriftHead(nn.Module):
 ```
                        ┌─ BN neck [cur_idx] → classifier → cls_outputs
                        │
-features → pool → flat ─┤─ F.normalize → identity_norm ─┬─ concat → finsler_features
-                       │                                │
-                       └─ FinslerDriftHead → drift ──────┘
+features → pool → flat ─┤─ BN neck → F.normalize → identity_norm ─┬─ concat → finsler_features
+                       │                                            │
+                       └─ FinslerDriftHead(global_feat) → drift ─────┘
                                                    (orthogonalized)
 ```
 
-**Discrepancy H1 — Eval output differs from `EmbeddingHead`.** The original `EmbeddingHead` (line 77) returns `F.normalize(global_feat)` at evaluation — a 2048-d L2-normalized vector. `FinslerEmbeddingHead` returns either `identity_norm` (2048-d, L2-normalized) when `EVAL_USE_DRIFT = False`, or `combined_f = [identity_norm | drift]` (4096-d) when `EVAL_USE_DRIFT = True`. The identity slice of `combined_f` is L2-normalized, but the drift slice is NOT L2-normalized. The concatenated vector has norm $\sqrt{1 + \|\boldsymbol{\omega}^\perp\|^2}$ which varies per sample. This matters for evaluation fusion (see Part 3).
+**Discrepancy H1 — Eval output differs from `EmbeddingHead`.** The original `EmbeddingHead` (line 77) returns `F.normalize(global_feat)` at evaluation — a 2048-d L2-normalized vector **without** applying the BN neck to the returned tensor. `FinslerEmbeddingHead` (post-2026-03-20 fix) uses `identity_norm = F.normalize(bn_feat)` for BAU parity; eval returns either that slice alone or `[identity_norm | drift]`. The identity slice is unit-norm, but the drift slice is NOT L2-normalized. The concatenated vector has norm $\sqrt{1 + \|\boldsymbol{\omega}^\perp\|^2}$ which varies per sample. This matters for evaluation fusion (see Part 3).
 
 **Discrepancy H2 — Orthogonalization placement.** In BAU (`bau/models/model.py` lines 366–368), orthogonalization occurs after drift generation and before concatenation:
 

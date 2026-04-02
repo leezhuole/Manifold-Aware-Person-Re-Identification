@@ -308,6 +308,11 @@ python examples/train_bau.py \
 | `--use-omega-reg` | `false` | add explicit drift norm regularization |
 | `--alpha-init` | `None` | enable learnable alpha when set |
 | `--bidirectional-triplet` | `false` | add inverse-direction batch-hard triplet loss |
+| `--cross-domain-contrastive-nuisance` | `dataset` | refined 1b pair mask: `dataset` (= merged `did`) or `camera` (= global `cid`) |
+| `--use-domain-triplet` | `false` | batch-hard triplet mining on camera or dataset id (opposes BAU `L_domain`; ablation) |
+| `--domain-triplet-mining-label` | `camera` | nuisance label used for domain triplet positives |
+| `--use-domain-balanced-second-loader` | `false` | extra `RandomDomainBalancedSampler` loader + second forward for domain triplet |
+| `--use-drift-only-cross-contrastive` | `false` | same-PID cross-camera L2 on drift only (no `d_F` on full embedding) |
 
 ---
 

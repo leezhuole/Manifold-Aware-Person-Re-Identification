@@ -31,15 +31,19 @@ DRIFT_METHOD=symmetric_trapezoidal      # Method for calculating the finsler dis
 SOURCE_DATASET="market1501 msmt17 cuhksysu"
 TARGET_DATASET=cuhk03
 DRT_CONDITIONING=instance                 # instance or domain
-SAMPLER="RandomIdentity"         # RandomIdentity, RandomMultipleGallery
+# Idea 1b (cross-domain contrastive) needs same-ID pairs from different source domains in batch; use RandomMultipleGallery.
+SAMPLER="RandomMultipleGallery"         # RandomIdentity, RandomMultipleGallery
+
+# Idea 1 (supervisor notes): 1a = Euclidean triplet on identity slice; 1b = cross-domain same-ID contrastive on model distance
+CROSS_DOMAIN_CONTRAST_WEIGHT=0.1
 
 # -- Hot Swappable --
 # SOURCE_DATASET="market1501 cuhksysu cuhk03"
 # TARGET_DATASET=msmt17
 
 # Run Specific Tags
-WANDB_TAGS=(finsler "dt-${TARGET_DATASET}" "drift-condition-${DRT_CONDITIONING}" "drift-method-${DRIFT_METHOD}" "OmegaReg${OMEGA_REG_WEIGHT}" "Sampler-${SAMPLER}")
-RUN_NAME="DriftCond${DRT_CONDITIONING}_Sampler${SAMPLER}_IdentityJaccard_EuclideanUniform_BidirectionalTriplet"
+WANDB_TAGS=(finsler idea1a-identity-triplet idea1b-xdom-contrastive "xdom-w${CROSS_DOMAIN_CONTRAST_WEIGHT}" "dt-${TARGET_DATASET}" "drift-condition-${DRT_CONDITIONING}" "drift-method-${DRIFT_METHOD}" "OmegaReg${OMEGA_REG_WEIGHT}" "Sampler-${SAMPLER}")
+RUN_NAME="Idea1a1b_idTriEuc_xDomContrast_w${CROSS_DOMAIN_CONTRAST_WEIGHT}_DriftCond${DRT_CONDITIONING}_${SAMPLER}_BidirectTri"
 # RUN_NAME="FHSigGate+ModFinsDist_BidirectTri_OmegaReg${OMEGA_REG_WEIGHT}"
 
 LOGS_DIR="$(pwd)/logs/m-ms-cs_c3/job_${SLURM_JOB_ID}_${RUN_NAME}"
@@ -77,8 +81,11 @@ srun --unbuffered python "${SNAP_DIR}/examples/train_bau.py" \
   --omega-reg-weight "${OMEGA_REG_WEIGHT}" \
   --drift-conditioning "${DRT_CONDITIONING}" \
   --sampler "${SAMPLER}" \
+  --identity-triplet-only \
+  --use-cross-domain-contrastive \
+  --cross-domain-contrastive-weight "${CROSS_DOMAIN_CONTRAST_WEIGHT}" \
   --wandb-tags "${WANDB_TAGS[@]}" \
-  --bidirectional-triplet 
+  --bidirectional-triplet
   # --use-drift-align \
   # --drift-dim 32 \
 

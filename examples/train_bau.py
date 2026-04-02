@@ -25,7 +25,11 @@ from bau.evaluators import Evaluator, extract_features
 from bau.utils.data import IterLoader, MultiSourceTrainDataset
 from bau.utils.data import transforms as T
 from bau.utils.data.randaugment import RandAugment
-from bau.utils.data.sampler import RandomIdentitySampler, RandomMultipleGallerySampler
+from bau.utils.data.sampler import (
+    RandomIdentitySampler,
+    RandomMultipleGallerySampler,
+    RandomDomainBalancedSampler,
+)
 from bau.utils.data.preprocessor import Preprocessor, TwoViewPreprocessor
 from bau.utils.logging import Logger
 from bau.utils.lr_scheduler import WarmupMultiStepLR
@@ -106,6 +110,59 @@ def get_train_loader(args, dataset, height, width, batch_size, workers, num_inst
                                          batch_size=batch_size, num_workers=workers, sampler=sampler,shuffle=not rmgs_flag, pin_memory=True, 
                                          drop_last=True), length=None)
     return train_loader
+
+
+def get_domain_balanced_train_loader(args, dataset, height, width, workers, images_dir):
+    """Second training stream for domain/camera-balanced batches (Finsler domain triplet)."""
+    normalizer = T.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225])
+    transforms_w = T.Compose([T.Resize((height, width), interpolation=3),
+                              T.RandomHorizontalFlip(p=0.5),
+                              T.Pad(10),
+                              T.RandomCrop((height, width)),
+                              T.ToTensor(),
+                              normalizer,])
+    transforms_s = T.Compose([T.Resize((height, width), interpolation=3),
+                              T.RandomHorizontalFlip(p=0.5),
+                              T.Pad(10),
+                              T.RandomCrop((height, width)),
+                              T.RandomApply([T.ColorJitter(brightness=(0.5, 2.0), contrast=(0.5, 2.0), saturation=(0.5, 2.0), hue=(-0.1, 0.1))], p=args.prob),
+                              T.ToTensor(),
+                              normalizer,
+                              T.RandomErasing(mean=[0.485, 0.456, 0.406], probability=args.prob),])
+    transforms_s.transforms.insert(0, T.RandomApply([RandAugment()], p=args.prob))
+
+    train_set = sorted(dataset.train)
+    db_batch = (
+        args.domain_balanced_batch_size
+        if args.domain_balanced_batch_size is not None
+        else args.batch_size
+    )
+    group_key = 'camera' if args.domain_triplet_mining_label == 'camera' else 'dataset'
+    sampler = RandomDomainBalancedSampler(
+        train_set,
+        batch_size=db_batch,
+        instances_per_group=args.domain_balanced_instances_per_group,
+        group_by=group_key,
+    )
+    loader = IterLoader(
+        DataLoader(
+            TwoViewPreprocessor(
+                train_set,
+                root=images_dir,
+                transform_w=transforms_w,
+                transform_s=transforms_s,
+            ),
+            batch_size=db_batch,
+            num_workers=workers,
+            sampler=sampler,
+            shuffle=False,
+            pin_memory=True,
+            drop_last=True,
+        ),
+        length=None,
+    )
+    return loader
 
 
 def get_memory_loader(dataset, height, width, batch_size, workers, trainset=None):
@@ -225,6 +282,15 @@ def main_worker(args):
     train_loader = get_train_loader(args, train_dataset, args.height, args.width, args.batch_size,
                                     args.workers, args.num_instances, train_dataset.images_dir)
     log("Built training data loader", level=2)
+
+    domain_triplet_loader = None
+    if args.use_domain_balanced_second_loader:
+        if not args.use_domain_triplet:
+            raise ValueError("--use-domain-balanced-second-loader requires --use-domain-triplet")
+        domain_triplet_loader = get_domain_balanced_train_loader(
+            args, train_dataset, args.height, args.width, args.workers, train_dataset.images_dir
+        )
+        log("Built domain-balanced second train loader for Finsler domain triplet", level=1)
     
     memory_loader = get_memory_loader(train_dataset, args.height, args.width, args.batch_size, args.workers,
                                       trainset=sorted(train_dataset.train))
@@ -251,6 +317,15 @@ def main_worker(args):
     num_source_domains = len(source_dataset)
     if args.drift_conditioning == "domain" and args.arch != "resnet50_finsler":
         raise ValueError("--drift-conditioning domain is only supported with --arch resnet50_finsler")
+    if args.use_euclidean_domain_loss:
+        if args.arch != "resnet50_finsler":
+            raise ValueError("--use-euclidean-domain-loss requires --arch resnet50_finsler")
+        if args.memory_bank_mode != "identity":
+            log(
+                "use_euclidean_domain_loss: forcing --memory-bank-mode identity (identity-only centroids / bank)",
+                level=1,
+            )
+        args.memory_bank_mode = "identity"
     model = create_model(args, num_classes=num_classes, manifold=manifold, num_domains=num_source_domains)
     log("Created model and moved to device", level=2)
 
@@ -384,6 +459,9 @@ def main_worker(args):
     centroids = []
     for pid in sorted(features_dict.keys()):
         reps = torch.cat(features_dict[pid], 0).to(device)
+        # extract_features may return full [identity|drift] rows while MemoryBank expects memory_bank_features
+        if reps.size(1) > memory_bank_features:
+            reps = reps[:, :memory_bank_features]
         if manifold is None:
             centroid = reps.mean(0)
             if split_norm:
@@ -478,7 +556,18 @@ def main_worker(args):
                          bidirectional_triplet=args.bidirectional_triplet,
                          use_omega_reg=args.use_omega_reg,
                          omega_reg_weight=args.omega_reg_weight,
-                         domain_token_loss_weight=args.domain_token_loss_weight)
+                         domain_token_loss_weight=args.domain_token_loss_weight,
+                         identity_triplet_only=args.identity_triplet_only,
+                         use_cross_domain_contrastive=args.use_cross_domain_contrastive,
+                         cross_domain_contrastive_weight=args.cross_domain_contrastive_weight,
+                         contrastive_nuisance=args.cross_domain_contrastive_nuisance,
+                         use_domain_triplet=args.use_domain_triplet,
+                         domain_triplet_weight=args.domain_triplet_weight,
+                         domain_triplet_margin=args.domain_triplet_margin,
+                         domain_triplet_mining_label=args.domain_triplet_mining_label,
+                         use_drift_only_cross_contrastive=args.use_drift_only_cross_contrastive,
+                         drift_only_cross_contrastive_weight=args.drift_only_cross_contrastive_weight,
+                         use_euclidean_domain_loss=args.use_euclidean_domain_loss)
     
     log("Trainer constructed", level=2)
 
@@ -486,8 +575,17 @@ def main_worker(args):
 
     for epoch in range(args.epochs):
         log(f"Epoch {epoch + 1}/{args.epochs} - starting", level=2)
-        train_loader.new_epoch() 
-        trainer.train(epoch, train_loader, optimizer, print_freq=args.print_freq, iters=args.iters)
+        train_loader.new_epoch()
+        if domain_triplet_loader is not None:
+            domain_triplet_loader.new_epoch()
+        trainer.train(
+            epoch,
+            train_loader,
+            optimizer,
+            print_freq=args.print_freq,
+            iters=args.iters,
+            domain_triplet_loader=domain_triplet_loader,
+        )
         log(f"Epoch {epoch + 1}/{args.epochs} - training step completed", level=2)
         lr_scheduler.step()
         log(f"Epoch {epoch + 1}/{args.epochs} - scheduler stepped", level=2)
@@ -664,6 +762,86 @@ if __name__ == '__main__':
     parser.add_argument('--use-aug-ce', action='store_true', help='use cross entropy loss on strongly augmented images')
     parser.add_argument('--no-align', action='store_true', help='disable alignment loss')
     parser.add_argument('--use-drift-align', action='store_true', help='enable drift alignment loss (resnet50_finsler only)')
+    parser.add_argument(
+        '--identity-triplet-only',
+        action='store_true',
+        help='use Euclidean batch-hard triplet on identity slice of emb only (Finsler models)',
+    )
+    parser.add_argument(
+        '--use-cross-domain-contrastive',
+        action='store_true',
+        help='add cross-domain same-identity contrastive loss (mean squared model distance)',
+    )
+    parser.add_argument(
+        '--cross-domain-contrastive-weight',
+        type=float,
+        default=0.1,
+        help='weight for cross-domain same-identity contrastive loss',
+    )
+    parser.add_argument(
+        '--cross-domain-contrastive-nuisance',
+        type=str,
+        default='dataset',
+        choices=['dataset', 'camera'],
+        help='nuisance label for refined 1b mask: dataset=did (source index), camera=global cam id',
+    )
+    parser.add_argument(
+        '--use-domain-triplet',
+        action='store_true',
+        help='batch-hard triplet with positives=same mining label (camera or dataset); conflicts with L_domain',
+    )
+    parser.add_argument(
+        '--domain-triplet-weight',
+        type=float,
+        default=1.0,
+        help='weight for Finsler domain triplet loss',
+    )
+    parser.add_argument(
+        '--domain-triplet-margin',
+        type=parse_optional_float,
+        default=None,
+        help='margin for domain triplet; default: same as --margin',
+    )
+    parser.add_argument(
+        '--domain-triplet-mining-label',
+        type=str,
+        default='camera',
+        choices=['camera', 'dataset'],
+        help='group label for domain triplet batch-hard mining',
+    )
+    parser.add_argument(
+        '--use-domain-balanced-second-loader',
+        action='store_true',
+        help='second DataLoader with RandomDomainBalancedSampler for domain triplet only (extra forward per step)',
+    )
+    parser.add_argument(
+        '--domain-balanced-batch-size',
+        type=int,
+        default=None,
+        help='batch size for domain-balanced loader (default: same as -b)',
+    )
+    parser.add_argument(
+        '--domain-balanced-instances-per-group',
+        type=int,
+        default=8,
+        help='instances per camera/dataset group in RandomDomainBalancedSampler',
+    )
+    parser.add_argument(
+        '--use-euclidean-domain-loss',
+        action='store_true',
+        help='BAU-style Euclidean L_domain on identity features only; forces identity memory bank (resnet50_finsler)',
+    )
+    parser.add_argument(
+        '--use-drift-only-cross-contrastive',
+        action='store_true',
+        help='L2 drift loss for same-PID different-camera pairs (identity slice not in metric)',
+    )
+    parser.add_argument(
+        '--drift-only-cross-contrastive-weight',
+        type=float,
+        default=0.1,
+        help='weight for drift-only cross-camera contrastive',
+    )
     parser.add_argument('--no-uniform', action='store_true', help='disable uniformity loss')
     parser.add_argument('--no-domain', action='store_true', help='disable domain loss')
     parser.add_argument('--no-triplet', action='store_true', help='disable triplet loss')
