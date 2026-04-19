@@ -1,5 +1,647 @@
 # Changelog
 
+**Timestamp:** 2026-04-14
+
+## [2026-04-14] - paper: Related Work asymmetric shift + `nguyen2024agreidv2` bib
+
+### Files modified
+- `paper/draft_5/sec/2_relatedwork.tex` — Condensed asymmetric / non-commutative domain-shift subsection; cite AG-ReID.v2~\cite{nguyen2024agreidv2} (replaces TODO).
+- `paper/draft_5/main.bib` — Added `nguyen2024agreidv2` (IEEE TIFS 2024, DOI 10.1109/TIFS.2024.3353078; metadata from dblp).
+
+### Problem this addresses
+Verbose subsection and missing aerial--ground citation.
+
+### Expected behavior
+`\cite{nguyen2024agreidv2}` resolves; prose fits repetition-reducer + tighter scientific-register goals.
+
+---
+
+## [2026-04-14] - paper: tighten objective interference in `paper/draft_5/sec/3_methodology.tex`
+
+### Files modified
+- `paper/draft_5/sec/3_methodology.tex` — `\subsection{Objective interference analysis}` condensed (repetition-reducer + scientific-writing pass): single block for empirical claim, definition, mechanism, $\mathcal{L}_{\mathrm{dom}}$ / $\mathcal{L}_{\mathrm{dcc}}$ roles, and attribution caveat; preserves $-7.5\%$, Arm~5, and $\max\|\hat{\omega}\|$ numbers.
+
+### Problem this addresses
+Redundant sentences and parallel “pull” enumerations inflated the subsection without adding testable precision.
+
+### Expected behavior
+Faster read; §4.2 remains the numeric anchor for Arm~5.
+
+---
+
+## [2026-04-14] - paper: abstract avoids unintroduced dataset shorthand
+
+### Files modified
+- `paper/draft_5/sec/0_abstract.tex` — Replaced `M+MS+CS$\rightarrow$C3` with prose: multi-source DG-ReID with CUHK03 as the target domain (same experimental referent; symbols deferred to the main text).
+
+### Problem this addresses
+Abstract used source abbreviations and arrow notation before notation is defined.
+
+### Expected behavior
+Abstract remains self-contained; full protocol naming stays in Sec.~experimental setup.
+
+---
+
+## [2026-04-14] - paper: refresh `tab:multiseed` from multiseed rerun (Slurm 1522341, 1522344--1522347)
+
+### Files modified
+- `paper/draft_5/sec/4_experimentalResults.tex` — Table~\ref{tab:multiseed}: per-seed mAP/R1/R5/R10 and mean$\pm$std from final evaluation in `logs/multiseed_primary_c3/job_152234{1,4,5,6,7}_primary_unified_1c_w0.1_driftInst_seed{5,1,2,3,4}/log.txt`; reproducibility paragraph: Rank-1 $43.6\pm0.4\%$, R5/R10 aggregate stds; removed outdated Rank-1 $1.0\%$ std narrative.
+
+### Problem this addresses
+Multiseed primary recipe was re-run; paper still listed the previous sweep’s per-seed cells and $44.2\pm1.0\%$ Rank-1.
+
+### Expected behavior
+Multiseed statistics match the new logs (best-checkpoint final eval). Abstract/conclusion lines that only cite $43.8\pm0.3\%$ mAP remain numerically consistent (mean $43.82\%$ rounded to one decimal).
+
+---
+
+## [2026-04-14] - paper: apply draft\_5 triage plan to `paper/draft_5/**/*.tex`
+
+### Files modified
+- `paper/draft_5/sec/3_methodology.tex` — Added `eq:domain_token_loss` after `eq:total_loss`; composite-loss / primary-recipe note; `eq:domain_triplet` in domain-loss subsection; rewrote objective interference (identity vs.\ camera triplet, secondary $\mathcal{L}_{\mathrm{dom}}$, $\mathcal{L}_{\mathrm{dcc}}$ contrast); fixed `subsec:ablations` → `subsec:quantitative_analysis` forward ref.
+- `paper/draft_5/sec/4_experimentalResults.tex` — Datasets labels; evaluation-metrics paragraph; multi-protocol table + 3-split averages + Protocol~3 wording; training list without $\mathcal{L}_{\mathrm{dom\text{-}tok}}$; primary-model and multi-target text aligned with provenance; multiseed paragraph; merged `tab:ablation_main` into `tab:aux_loss_sweep` (H1--H5); Arm~1b cells $44.3/44.8$; uniformity pointer + new supp ref; controlled-corruption rewrite (EL-10/11/12/16), optional `fig/fig_drift_monotonicity.pdf` figure with placeholder.
+- `paper/draft_5/sec/5_discussion.tex` — Removed duplicate interference/future-work blocks (absorbed elsewhere); updated bidir gain wording.
+- `paper/draft_5/sec/6_conclusion.tex` — Positive-first conclusion (EL-14 Option II numbers); future work retains Randers-as-supervision line with cites.
+- `paper/draft_5/sec/0_abstract.tex` — Abstract aligned with headline reconciliation (EL-17).
+- `paper/draft_5/sec/1_intro.tex` — Toy figure caption: `pp` → `\%` mAP.
+- `paper/draft_5/sec/X_suppl.tex` — `tab:ablation_main` references → H-rows / `tab:aux_loss_sweep`; domain-triplet section points to main `eq:domain_triplet`; new `sec:suppl_uniformity_alpha`; bidirectional supp sentence updated.
+
+### Problem this addresses
+Executes the approved triage plan in-source: provenance-consistent numbers, merged tables, methodology equations, and reduced repetition.
+
+### Expected behavior
+PDF builds under a full CVPR toolchain; `pdflatex` in this environment may still fail if `cvpr.sty` is not installed locally. Place `fig_drift_monotonicity.pdf` under `paper/draft_5/fig/` to replace the corruption figure placeholder (or leave absent to use the framed placeholder).
+
+---
+
+## [2026-04-14] - docs: draft 5 triage plan — post-review integration (EL-07, EL-14, EL-17, publication_facts)
+
+### Files modified
+- `changelogs/draft_5_triage_plan.md` — Merged outcomes from `draft_5_plan_review_citations.md` (complete), `draft_5_plan_review_writing_coach.md`, and `draft_5_plan_review_repetition.md`: **EL-14** rewritten for provenance-clean **Option II** (44.3/44.8 vs 42.4, +1.9%; multiseed 43.8 ± 0.3%); **EL-07** prose (no `itemize`); **EL-02/04/05/08** tightened per reviews; new **EL-17** (abstract alignment); orchestrator handoff section; author decision **#7** for UV-CITE-004.
+- `.cursor/paper/publication_facts.md` — New subsection **Headline_number_reconciliation** pairing headline mAP/Δ claims with jobs **1521465**, **1521474**, multiseed stats, and legacy **1521403** (no mixing with +1.9%).
+- `.cursor/paper/unsourced_or_vague_claims.md` — **UV-CITE-004** marked **resolved** with pointer to the above.
+
+### Problem this addresses
+Prior agent left citation-substantiation finished but writing-coach/repetition flags on **EL-14** and **EL-07** not yet folded into the executable plan; **44.9/+1.9%** pairing was internally inconsistent.
+
+### Expected behavior
+Authors implement draft\_5 from a single reconciled plan; headline numbers and Δ claims trace to **Headline_number_reconciliation**; abstract edits deferred to **EL-17** after conclusion text is approved.
+
+---
+
+## [2026-04-14] - paper: drop SOTA comparison table from `paper/draft_4/4_experimentalResults.tex`
+
+### Files modified
+- `paper/draft_4/4_experimentalResults.tex` — Removed the DG-ReID comparison table (`tab:sota_comparison`, BAU Table~4 placeholder / TBD rows). No `\ref{tab:sota_comparison}` existed elsewhere in `paper/draft_4/`.
+
+### Problem this addresses
+Author requested removing that table and any references; prior-work numbers remain citable in prose via BAU~\cite{cho2024generalizable} where needed.
+
+### Expected behavior
+Table numbering in the compiled PDF shifts; no dangling labels for `tab:sota_comparison`.
+
+---
+
+## [2026-04-14] - paper: tabularx replaces resizebox in `paper/draft_4/*.tex`
+
+### Files modified
+- `paper/draft_4/4_experimentalResults.tex` — All tables: removed `\resizebox{...}{!}{...}`; use `\begin{tabularx}{\columnwidth}` for single-column floats and `\begin{tabularx}{\textwidth}` for `table*`; flexible text columns use `>{\raggedright\arraybackslash}X` (or `l` + `X` where noted); numeric columns stay `r`/`c` as before. Comment at top of section lists `\usepackage{tabularx}` for the main preamble.
+- `paper/draft_4/X_suppl.tex` — Same for eval-drift Tables~A/B (`\textwidth`).
+
+### Problem this addresses
+Scaled tables (`\resizebox`) shrink body font relative to running text; `tabularx` fixes total width and lets columns absorb space so font size matches the document.
+
+### Expected behavior
+Tables span `\columnwidth` or `\textwidth` without scaling; long cells wrap inside `X` columns. Main file must load `tabularx` (and already needs `booktabs`, `multirow`).
+
+---
+
+## [2026-04-14] - paper: dataset table inline cites in `paper/draft_4/4_experimentalResults.tex`
+
+### Files modified
+- `paper/draft_4/4_experimentalResults.tex` — `tab:dataset_stats`: dropped the Reference column; moved each dataset’s citation next to its name in the first column (`lrrr` tabular).
+
+### Problem this addresses
+Redundant column when references can sit on the dataset label.
+
+### Expected behavior
+Same bibliographic pointers as before, narrower table.
+
+---
+
+## [2026-04-14] - paper: side-by-side dataset + protocol tables in `paper/draft_4/4_experimentalResults.tex`
+
+### Files modified
+- `paper/draft_4/4_experimentalResults.tex` — Combined `tab:dataset_stats` and `tab:protocol_splits` into one `table` float with two `minipage`s (56\%/42\% of `\linewidth`), each `\resizebox{\linewidth}{!}{...}`; single merged caption (Left/Right) with both `\label`s on the same float.
+
+### Problem this addresses
+Back-to-back full-width tables wasted vertical space; a unified caption reduces repetition.
+
+### Expected behavior
+Both table references still resolve to one table number; panels scale proportionally within the column (`\linewidth` matches `\columnwidth` in twocolumn column floats and `\textwidth` in single-column).
+
+---
+
+## [2026-04-14] - paper: condense datasets/protocols opening in `paper/draft_4/4_experimentalResults.tex`
+
+### Files modified
+- `paper/draft_4/4_experimentalResults.tex` — Merged the former opening paragraph plus `\paragraph{Multi-target evaluation.}` and `\paragraph{Metrics.}` into a single subsection paragraph; retained “subset of Protocol~2” scope and `\label{subsubsec:metrics}` on the metrics/ranking sentence.
+
+### Problem this addresses
+Redundant “following BAU / Protocol~2” framing and three micro-headings broke CVPR-style pacing at the start of Experimental Results.
+
+### Expected behavior
+One dense setup block states Protocol~2 alignment with BAU, the three leave-one-out splits (with primary split rationale), the six-split table reference, and CMC/mAP plus Finsler vs Euclidean ranking conventions.
+
+---
+
+**Timestamp:** 2026-04-13
+
+## [2026-04-13] - docs: Idea‑1 1d/1e results analysis markdown in `bau/docs/`
+
+### Files modified
+- `bau/docs/Idea1_1d1e_results_analysis.md` — New document: slide talking points, for/against a Euclidean \(\mathcal{L}_{\mathrm{dom}}\) sweep for 1d/1e, paper‑substitute narrative, and pointers to `results/metric sweeps/` provenance.
+
+### Problem this addresses
+The compiled table / discussion from the Idea‑1 1d/1e ablation lived only in chat; the repo needed a single reference copy aligned with `changelogs/Idea1_Experiments_1d1e_Analysis.md` and sweep ledgers.
+
+### Expected behavior
+Authors can paste or adapt sections into `paper/draft_4/` and slides; empty Euclidean‑\(\mathcal{L}_{\mathrm{dom}}\) cells for 1d/1e are explicitly labeled unrun, not null results.
+
+---
+
+## [2026-04-13] - changelogs: align Idea1 1d/1e analysis with `drift_cross_camera_uniformity_loss` (raw drift)
+
+### Files modified
+- `changelogs/Idea1_Experiments_1d1e_Analysis.md` — §4.2 loss and notation: **unnormalized** $\omega_i$ (matches `bau/trainers.py` after 2026-04-10 no-norm change); corrected gradient sketch for upper-triangle pair sum; updated BAU parallel table, §5.1/§5.2/§5.4, and §6 table; clarified that Wang–Isola hyperspherical guarantee does not apply verbatim to 1e on the Randers ball.
+- `bau/trainers.py` — Docstring/comment on `drift_cross_camera_uniformity_loss` updated to describe raw-drift operation (no `F.normalize`).
+
+### Problem this addresses
+Section 4.2 still described $L_2$-normalized drift and a gradient sum over all $j$ with $c_j \neq c_i$, which disagreed with the current trainer (Gaussian kernel on raw drift; upper-triangle mask). §5.2 incorrectly claimed 1e was norm-invariant.
+
+### Expected behavior
+The analysis document matches the implemented constraint set $\mathcal{C}_{1e}=\{(i,j): c_i\neq c_j,\, i<j\}$ and $\mathcal{L}_{1e}=\log\,\mathrm{mean}_{(i,j)\in\mathcal{C}_{1e}}\exp(-t\|\omega_i-\omega_j\|_2^2)$.
+
+---
+
+## [2026-04-13] - toy_paper_figures: nudge `100.0` down, `62.3` up on mAP plot
+
+### Files modified
+- `scripts/toy_paper_figures.py` — `VALUE_TEXT_NUDGE_POINTS`: `100.0` extra offset now includes **−3 pt** vertical (slightly lower); added `62.3` with **+5 pt** vertical (and kept `62.6` alias) so the low-Finsler label sits higher while preserving horizontal left nudge.
+
+### Problem this addresses
+Intro figure `fig_retrieval_mAP.pdf`: merged `100.0` sat slightly high; Finsler ~62.3 label needed a bit more clearance from the bottom.
+
+### Expected behavior
+Re-run `scripts/regenerate_toy_figures.py` (or toy retrieval stage) to refresh PDFs.
+
+---
+
+## [2026-04-13] - toy paper figures: shared `toy_paper_figures.py`, Eucl-above / Fins-below mAP labels, draft\_4 sync
+
+### Files modified
+- `scripts/toy_paper_figures.py` — New module: `make_corruption_strip`, `make_retrieval_mAP_plot` (Euclidean annotations above markers, Finsler below; merged gray label when curves coincide; one-decimal value nudges for `100.0` / `68.8` / `62.6` to avoid clipping past the axes), `copy_paper_outputs` (hook PDFs + optional full output mirror).
+- `scripts/regenerate_toy_figures.py` — Delegates to `toy_paper_figures`; fixes `sys.path` so imports work when run as `python scripts/regenerate_toy_figures.py`; optional `--also-mirror-to`.
+- `scripts/toy_dataset_analysis.py` — Uses shared paper hooks (`fig_corruption_strip.pdf`, `fig_retrieval_mAP.pdf`); keeps optional `fig_paper_corruption_strip.pdf` (ω norms per panel, **no suptitle**) for draft\\_3; adds `--paper-fig-dir`, `--paper-mirror-dir`; paper-style cleanup on other figures (no suptitles / plot titles where they duplicated captions; Spearman stats as small axes text on drift monotonicity; higher DPI/pad for exports).
+
+### Problem this addresses
+Paper `draft_4` hooks must match regeneration styling; mAP value labels needed Euclidean-above / Finsler-below placement with manual nudges for edge labels; full toy run should refresh `paper/draft_4/fig` and optionally mirror the whole results folder.
+
+### Expected behavior
+`python scripts/regenerate_toy_figures.py` and the retrieval/strip stages of `toy_dataset_analysis.py` produce the same hook PDF styling; `fig_retrieval_mAP.pdf` places Eucl values on top of markers and Fins values underneath, with targeted shifts for 100.0 / 68.8 / 62.6.
+
+---
+
+## [2026-04-13] - sbatch: MSMT17-target redo for protocol23_primary multitarget (OOM)
+
+### Files modified
+- `sbatch/protocol23_primary_multitarget_msmt17_redo.sbatch` — New 2-task array (`0` = P2 `p2_m-cs-c3_dt-msmt17`, `1` = P3 `p3_mdg-cs-c3dg_dt-msmt17`) mirroring `protocol23_primary_multitarget.sbatch` tasks 1 and 4; SLURM `--mem` raised from 32G to **64G**; distinct job/log names and W&B run names/tags (`protocol23-msmt17-redo`, `oomfix-mem64G`) so results do not collide with the failed parent job.
+
+### Problem this addresses
+Array tasks targeting MSMT17 in job `1521463` were **cgroup OOM-killed** during MSMT17 evaluation (SLURM: `oom_kill event`, `srun: ... Out Of Memory` in `logs/slurm_logs/finsler-p23-primary-1521463_{1,4}.err`), after training had started; MSMT17’s large test split makes eval memory-heavy under the original 32G RAM limit.
+
+### Expected behavior
+Submit with `sbatch sbatch/protocol23_primary_multitarget_msmt17_redo.sbatch`; both runs should complete full training and eval without OOM if the cluster grants 64G RAM. If OOM persists, increase `--mem` further or reduce eval batch/workers in `train_bau` (not changed here).
+
+---
+
+**Timestamp:** 2026-04-12
+
+## [2026-04-12] - toy_dataset_analysis: `fig_retrieval_mAP` matches combined-paper (a) style (no table)
+
+### Files modified
+- `scripts/toy_dataset_analysis.py` — `plot_retrieval_mAP`: removed under-plot table; restored **short** legend strings (`Finsler BAU ($d_F$)`, `Euclidean BAU ($d_E$)`), `fontsize=9` legend with `loc="upper right"`, `framealpha=0.95`, **one-decimal** annotations at each marker (`xytext` offsets $(8,10)$ and $(-8,-12)$, `fontsize=8`), axis label `fontsize=11`, padded `ylim`, `clip_on=False` on lines—same as the former `fig_combined_paper.pdf` panel (a).
+
+- `paper/draft_3/4_experimentalResults.tex` — Fig.~\ref{fig:corruption_analysis} caption: values **next to markers**, not tabulated below.
+
+- `docs/toy_dataset_synthesis.md` — Output blurb updated.
+
+### Problem this addresses
+Authors preferred marker-adjacent mAP labels and combined-paper legend formatting without the bottom table.
+
+### Expected behavior
+`fig_retrieval_mAP.pdf` is a single axes with curve annotations only; re-run `toy_dataset_analysis.py` to regenerate.
+
+---
+
+## [2026-04-12] - toy_dataset_analysis: split paper figures; mAP table under line plot
+
+### Files modified
+- `scripts/toy_dataset_analysis.py` — Removed `plot_combined_paper_figure` and `fig_combined_paper.pdf`. Added `plot_paper_corruption_strip` → `fig_paper_corruption_strip.pdf` (single row of five crops). `plot_retrieval_mAP` uses **gridspec**: line plot + **tabular** mAP values (no on-curve text). Main writes the strip after retrieval metrics.
+
+- `paper/draft_3/4_experimentalResults.tex` — Fig.~\ref{fig:corruption_analysis} stacks `fig_retrieval_mAP.pdf` and `fig_paper_corruption_strip.pdf`.
+
+- `docs/toy_dataset_synthesis.md` — Output list updated.
+
+### Problem this addresses
+Combined two-panel PDF still had cramped mAP labels; authors asked for **two separate** generated PDFs for the paper panels.
+
+### Expected behavior
+Regenerating the toy analysis produces `fig_retrieval_mAP.pdf` (plot + table) and `fig_paper_corruption_strip.pdf` independently; both are required for the controlled-corruption figure in draft\_3.
+
+---
+
+## [2026-04-12] - paper/draft_3/X_suppl.tex: eval-drift tables use `c` columns (no siunitx `S`)
+
+### Files modified
+- `paper/draft_3/X_suppl.tex` — Replaced `S[table-format=...]` column specs with `@{ }lc*{6}{c}@{ }` for Tables A and B (eval-drift supplementary). Header row uses plain `c` cells (removed brace-wrapped literals intended for `S` columns).
+
+### Problem this addresses
+`S` columns require `\usepackage{siunitx}` and treat cells as parsed numerics; `\textbf{...}` and signed $\Delta$ cells conflict with that model, causing build errors or fragile markup when the main document does not load `siunitx`.
+
+### Expected behavior
+Supplementary eval-drift tables compile with only `booktabs`/`multirow`-class dependencies; alignment remains centered for all numeric and $\Delta$ cells.
+
+---
+
+## [2026-04-12] - toy_dataset_analysis: fix retrieval mAP plot annotations and y-limits
+
+### Files modified
+- `scripts/toy_dataset_analysis.py` — `plot_retrieval_mAP` and panel (a) of `plot_combined_paper_figure`: numeric labels use horizontal offsets (Finsler left-above marker, Euclidean right-below) so coincident curves no longer overlap; `set_ylim` adds bottom/top padding; `clip_on=False` on lines; `savefig(..., pad_inches=0.2)`; legend `loc="upper right"` with `framealpha=0.95` to stay clear of the downward trend.
+
+### Problem this addresses
+mAP value annotations stacked on the same vertical offsets and clipped past the axes for high mAP values.
+
+### Expected behavior
+`fig_retrieval_mAP.pdf` / combined paper panel (a) show readable, non-overlapping labels inside padded y-range after re-running the script.
+
+---
+
+## [2026-04-12] - Toy analysis: subsampled ω/identity PCA + optional t-SNE; paper figure stub
+
+### Files modified
+- `scripts/toy_dataset_analysis.py` — Added `subsample_pids_with_full_severity`, `gather_identity_drift_arrays`, and `plot_omega_identity_pca_panels` (PCA on $\hat{\mathbf{z}}^{\omega}$ with per-identity polylines $s{=}0{\rightarrow}4$, separate PCA on $\mathbf{z}^{\mathrm{id}}$; optional `sklearn` $t$-SNE scatter on $\omega$ only, non-metric). New CLI: `--viz-num-identities`, `--viz-seed`, `--fig-omega-identity-pca`, `--viz-tsne`, `--fig-omega-tsne`, `--tsne-perplexity`, `--tsne-seed`. Writes `drift_projection_provenance.json` under `--output-dir`.
+
+- `paper/draft_3/4_experimentalResults.tex` — `\input{fig_toy_omega_projection}` after the controlled-corruption figure; qualitative subsection references Fig.~\ref{fig:toy_omega_identity_pca} and PCA vs.\ $t$-SNE caveats.
+
+### Files added
+- `paper/draft_3/fig_toy_omega_projection.tex` — Figure environment + caption for `fig_omega_identity_pca.pdf` (copy from `results/toy_analysis/` into the LaTeX build directory or set `\graphicspath`).
+
+### Problem this addresses
+Provide a **reviewer-defensible**, linear (PCA) qualitative view of the drift slice vs.\ the identity slice on the toy protocol, plus optional exploratory $t$-SNE, aligned with the paper’s asymmetric-drift narrative.
+
+### Expected behavior
+Running `toy_dataset_analysis.py` emits `fig_omega_identity_pca.pdf` and provenance JSON; with `--viz-tsne`, also `fig_omega_tsne.pdf`. PDFs are not committed here; authors sync them into the paper tree for compilation.
+
+---
+
+## [2026-04-12] - ToyCorruption v2.0: ImageNet-C–aligned pipeline, metadata schema, synthesis doc
+
+### Files modified
+- `scripts/generate_toy_dataset.py` — Replaced v1 pipeline (blur → JPEG → resize → additive brightness) with **defocus blur → horizontal motion blur → bilinear down/up → gamma tone → Poisson + Gaussian noise → JPEG**, anchored to Hendrycks & Dietterich (ICLR 2019) / ImageNet-C operator families. Added `TOY_DATASET_VERSION` `"2.0"`, deterministic noise RNG per `(seed, pid, level)`, and **`metadata.json` schema v2** (`dataset` + `images`). Motion blur uses **NumPy-only** averaging (no SciPy runtime dependency).
+
+### Files added
+- `docs/toy_dataset_synthesis.md` — Full design synthesis: C1–C3 claims, pipeline order, literature mapping, exact severity table, limitations, regeneration (including stale-file warning).
+
+### Files regenerated (local run)
+- `examples/data/ToyCorruption/` — 50 identities × 5 severities; `results/toy_analysis/` figures and JSON metrics refreshed via `toy_dataset_analysis.py` (BAU conda env).
+
+### Problem this addresses
+Toy degradations needed explicit **community benchmark** justification, more **camera-relevant** diversity (motion, exposure-like gamma, sensor noise), and **documented provenance** for paper/reviewer use.
+
+### Expected behavior
+Drift validation remains defined on **severity = cam_id − 1**. Correlation of drift magnitude with severity should stay **positive** on sufficiently large identity samples; exact Spearman values depend on the Finsler checkpoint. Regenerating into a non-empty output tree without clearing may **mix old and new** image counts—clear `bounding_box_test/`, `query/`, and `gallery/` first when changing `--num-identities`.
+
+---
+
+## [2026-04-12] - Protocol-2 sample images: three identities, two cameras each
+
+### Files added
+- `protocol2_identity_pairs/` — Six crops copied from local DG-ReID roots: Market-1501 (pid 2, cameras 1 vs 6), MSMT17 (pid 953, cameras 1 vs 15), CUHK03-NP detected (pid 1056, cameras 1 vs 2). Renamed for clarity.
+
+### Problem this addresses
+Need a small, reproducible set of same-ID cross-camera pairs from Protocol-2–relevant datasets for qualitative figures or inspection.
+
+### Expected behavior
+CUHK-SYSU is omitted here: `bau/datasets/cuhksysu.py` assigns a dummy camera id to all SYSU crops, so distinct `cid` pairs are not defined in this codebase.
+
+---
+
+## [2026-04-12] - Paper draft\_3: integrate draft tables via \texttt{\\input}
+
+### Files modified
+- `paper/draft_3/4_experimentalResults.tex` — `\paragraph{Historical loss-structure ablations}` now introduces Table~\ref{tab:ablation_main} and `\input`s `draft_table_main` (with `\IfFileExists` fallback for different main-file locations).
+- `paper/draft_3/X_suppl.tex` — New Sec.~\ref{sec:suppl_eval_drift_tables} with bridging prose and `\input` of `draft_table_supplementary`.
+
+### Problem this addresses
+Table bodies lived in standalone files and were not part of the compiled sections.
+
+### Expected behavior
+Building the paper from `paper/draft_3/` or `paper/` picks up the correct table fragments; supplementary eval-drift tables appear under the new supplement section.
+
+---
+
+## [2026-04-12] - Paper draft\_3: replace internal experiment codes with formal loss names
+
+### Files modified
+- `paper/draft_3/3_methodology.tex` — Renamed: identity-sliced triplet; $\mathcal{L}_{\mathrm{dcc}}$ (cross-camera drift coherence), $\mathcal{L}_{\mathrm{sca}}$ (same-camera drift attraction); labels `subsec:unified_vs_identity_sliced`, `eq:loss_dcc`; weights $w_{\mathrm{dcc}}$, $w_{\mathrm{sca}}$.
+- `paper/draft_3/4_experimentalResults.tex`, `0_abstract.tex`, `1_intro.tex` — Propagated notation; auxiliary table uses DCC/SCA abbreviations with caption definitions; `EXP` $\rightarrow$ `Arm`.
+- `paper/draft_3/draft_table_main.tex`, `paper/draft_3/draft_table_supplementary.tex` — Method column uses descriptive names (identity-sliced triplet, domain triplet only, $\mathcal{L}_{\mathrm{dcc}}$, etc.).
+- `.cursor/paper/publication_facts.md` — Recommended primary row relabeled with $\mathcal{L}_{\mathrm{dcc}}$ (INTERNAL ledger still uses historical sweep labels elsewhere).
+
+### Problem this addresses
+Internal labels (1a, 1c, 1d) are not appropriate for formal submission prose.
+
+### Expected behavior
+Main text and tables read in standard terminology; equation references use `\eqref{eq:loss_dcc}`.
+
+---
+
+## [2026-04-12] - Paper draft\_3: results lock, methodology objective, experiments section
+
+### Files modified
+- `.cursor/paper/publication_facts.md` — Set `Drafting_phase` to `results_implementation_lock`; added **Auxiliary loss configuration sweep (job 1521019)** under `Reported_metrics_with_provenance`.
+- `paper/draft_3/3_methodology.tex` — New subsections: unified vs.\ 1a triplet; drift auxiliaries $\mathcal{L}_{1c}$/$\mathcal{L}_{1d}$; total objective eq.~\eqref{eq:total_loss}; interference subsection closing sentence updated.
+- `paper/draft_3/4_experimentalResults.tex` — Quantitative analysis (primary model, experiment inventory, outstanding runs), template tables for multi-protocol and extended ranks, auxiliary sweep Table~\ref{tab:aux_loss_sweep}, ablation narrative (BAU-style).
+- `paper/draft_3/0_abstract.tex`, `paper/draft_3/1_intro.tex` — Aligned with results lock and primary configuration wording.
+- `paper/draft_3/draft_table_main.tex` — Header comment updated for `results_implementation_lock`.
+
+### Problem this addresses
+Theory-first constraints no longer match the author’s shift to locking results and documenting the best auxiliary configuration (unified + 1c, instance drift); methodology lacked the full composite loss and experiments section was largely empty.
+
+### Expected behavior
+Agents reading `publication_facts.md` treat benchmark numbers and job IDs as admissible in main text where cited; draft\_3 states the provenanced primary model, full $\mathcal{L}$ decomposition, remaining benchmark placeholders, and auxiliary sweep table.
+
+### Follow-up (same day)
+- Post `paper-scientific-writing-coach` / `paper-repetition-reducer` pass: tightened abstract closing, split intro contributions (iv)/(v), replaced “formalize” interference wording, pointed total-objective primary recipe to `tab:aux_loss_sweep`, added corruption-figure caption takeaway.
+
+---
+
+## [2026-04-12] - Collate sweep_auxiliary_loss_configs metrics from job logs
+
+### Files modified
+- `results/metric sweeps/sweep_auxiliary_loss_configs_metrics.md` (new) — Final evaluation (best checkpoint) mAP and CMC (R1, R5, R10) for all 12 runs under `logs/sweep_auxiliary_loss_configs/job_1521019_*`, parsed from each `log.txt` after `Loaded best model for final evaluation`.
+
+### Problem this addresses
+No single table summarized the completed auxiliary-loss sweep (job 1521019).
+
+### Expected behavior
+Provenance table matches numbers in per-job `log.txt`; notes call out best mAP/R1 cells and EXP 5 regression.
+
+---
+
+**Timestamp:** 2026-04-10
+
+## [2026-04-10] - Paper Draft 3: condense controlled corruption subsection
+
+### Files modified
+- `paper/draft_3/4_experimentalResults.tex` — Tightened `\subsection{Controlled corruption analysis}`: single setup paragraph; C2/C1/C3 without repeating suppression-vs-retrieval and benchmark-vs-toy claims; shortened Fig.~\ref{fig:corruption_analysis} panel (b) caption to avoid duplicating Spearman and drift magnitude from the body; one interpretation paragraph (diagnostic + Sec.~\ref{subsec:domain_conditioned_drift} link + open direction).
+
+### Problem this addresses
+The subsection restated the same conclusions (monotonic drift, small norm, training suppression) across C2, the figure caption, and Interpretation.
+
+### Expected behavior
+Readers get one clear arc: controlled toy protocol $\rightarrow$ drift tracks severity but stays small; identity absorbs corruption; two-checkpoint retrieval comparison; why this matters and what is left open.
+
+---
+
+**Timestamp:** 2026-04-10
+
+## [2026-04-10] - toy_dataset_analysis: independent Euclidean vs Finsler checkpoints
+
+### Files modified
+- `scripts/toy_dataset_analysis.py` — Retrieval mAP and qualitative rank-list compare **two checkpoints**: Euclidean BAU `resnet50` (default `logs/AGReIDv2_sweep/job_1502418_dt_cuhk03_EucBaseline/best.pth`) with Euclidean distance on 2048-d embeddings vs. Finsler `resnet50_finsler` (`--finsler-checkpoint`) with `finsler_drift_dist` on full 4096-d embeddings. Replaces the prior same-checkpoint identity-only vs `d_F` comparison. Added `load_bau_euclidean_resnet50` and `baseline_euclidean_resnet50` on retrieval helpers. `retrieval_metrics.json` uses keys `euclidean_bau_resnet50_dE`, `finsler_bau_dF`, plus `euclidean_checkpoint` / `finsler_checkpoint` paths.
+
+### Expected behavior
+- `--euclidean-checkpoint` defaults to the path above; use another BAU `resnet50` `best.pth` with matching `--num-classes` if needed.
+
+---
+
+**Timestamp:** 2026-04-10
+
+## [2026-04-10] - Paper Draft 3: Architecture figure — encoder parallelogram + input arrows
+
+### Files modified
+- `paper/draft_3/fig_architecture.tex` — BAU encoder drawn as a parallelogram via `path picture` (vertical left edge, top-right vertex shifted for a slanted right edge; avoids `shape=parallelogram`, which is missing on some TeX Live installs). Weak/strong view arrows now terminate on the **left face** using projection onto the `north west`–`south west` segment (`calc`).
+
+### Expected behavior
+The figure compiles with `shapes.geometric` + `calc` as documented in the file header; inputs meet the encoder’s left margin at the correct heights.
+
+---
+
+**Timestamp:** 2026-04-10
+
+## [2026-04-10] - Paper Draft 3: BAU-style architecture figure polish
+
+### Files modified
+- `paper/draft_3/fig_architecture.tex` — Removed unused stop-gradient arrow style; folded default-eval note into the structured-feature node (avoids a misleading extra “flow” to a side box); minor encoder node typography (`\textbf{BAU encoder}` + fixed width). Figure remains BAU-level abstract: dual views, shared BAU encoder, split identity/drift, structured embedding, caption points to methodology and experimental-results sections for objectives.
+
+### Problem this addresses
+Post-review polish after the BAU-style abstraction: fewer visual elements competing for attention and no arrow implying eval is a forward pass from $\mathbf{z}$.
+
+### Expected behavior
+`pdflatex` on a document that inputs `fig_architecture.tex` (with TikZ libraries as in the figure header comment) compiles; cross-references resolve when the full paper defines the cited labels and bibliography.
+
+---
+
+**Timestamp:** 2026-04-10
+
+## [2026-04-10] - Controlled corruption toy dataset and drift vector validation
+
+### Files added
+- `scripts/generate_toy_dataset.py` — Generates a synthetic dataset from Market-1501 test identities with 5 severity levels of composite camera-realistic corruptions (blur, JPEG, downscale, brightness). Each severity level is assigned a distinct synthetic camera ID. Output follows Market-1501 naming convention.
+- `scripts/toy_dataset_analysis.py` — Standalone analysis script: loads Finsler and Euclidean checkpoints, extracts full [identity|drift] embeddings on the toy dataset, computes per-severity drift magnitude and identity distance metrics, runs clean→corrupted retrieval experiments, and generates paper-ready figures (quantitative, retrieval mAP with under-plot table, corruption strip, qualitative rank-list, optional ω PCA).
+
+### Files modified
+- `paper/draft_3/4_experimentalResults.tex` — Added new §4.3 "Controlled corruption analysis" with three diagnostic claims (C1: identity sensitivity, C2: drift monotonicity, C3: asymmetric retrieval), figure reference, and interpretation paragraph. Honest reporting: drift magnitude is statistically monotonic (Spearman ρ>0.5, p<1e-17) but too small (~0.05) to alter retrieval rankings.
+
+### Generated outputs
+- `results/toy_analysis/drift_identity_metrics.json` — Per-severity drift norm and identity distance statistics with Spearman correlation.
+- `results/toy_analysis/retrieval_metrics.json` — mAP/Rank-1 for Euclidean vs Finsler ranking at each gallery severity.
+- `results/toy_analysis/fig_drift_monotonicity.pdf` — Dual-axis plot: drift magnitude (monotonic increase) and identity distance (substantial increase) vs. severity.
+- `results/toy_analysis/fig_retrieval_mAP.pdf` — mAP vs. gallery severity for Finsler $d_F$ vs Euclidean $d_E$, with tabulated values under the plot.
+- `results/toy_analysis/fig_retrieval_qualitative.pdf` — Rank-list comparison panels.
+- `results/toy_analysis/fig_paper_corruption_strip.pdf` — Single-row corruption strip with $\|\omega\|$ per severity (paper panel).
+- `/home/stud/leez/storage/user/reid/data/ToyCorruption/` — 250 images (50 identities × 5 severity levels).
+
+### Key findings
+1. **Drift monotonicity confirmed:** Drift magnitude increases monotonically with corruption severity (ρ=0.51, p=2.5e-18), proving the drift branch responds to controlled camera-like degradation.
+2. **Drift magnitude suppressed:** Absolute drift norms remain in [0.053, 0.062], far too small to materially alter pairwise distances. Domain-invariant training (alignment + uniformity) actively suppresses drift.
+3. **Identity NOT invariant:** Identity distance from clean grows 0→1.26 across severity levels. The identity branch absorbs corruption variation rather than delegating it to drift.
+4. **Retrieval delta zero:** Finsler d_F and Euclidean d_E produce identical mAP at all severity levels. The drift vector does not contribute to ranking under the current recipe.
+5. **Interpretation:** The experiment confirms the eval-drift-true sweep finding (near-zero ΔmAP) with a controlled, interpretable diagnostic. The drift branch has the correct directional response but insufficient magnitude to be useful.
+
+### Problem this solves
+The paper claims asymmetric retrieval geometry is motivated by non-commutative camera degradation, but no prior experiment isolated whether the drift vector actually encodes this. The toy dataset provides controlled evidence that the drift branch responds to severity but is suppressed by the training stack.
+
+### Expected behavior after this patch
+Running `python scripts/generate_toy_dataset.py` generates the toy dataset. Running `python scripts/toy_dataset_analysis.py --finsler-checkpoint <path>` produces all figures and metrics. The paper draft now includes a §4.3 with honest reporting of the diagnostic results.
+
+---
+
+**Timestamp:** 2026-04-08
+
+## [2026-04-08] - Paper Draft 3: Conciseness tightening pass (Sec 3, 4.2, supplementary)
+
+### Files modified
+- `paper/draft_3/3_methodology.tex` — Full rewrite for CVPR-level conciseness
+- `paper/draft_3/4_experimentalResults.tex` — Sec 4.2 implementation details tightened
+- `paper/draft_3/X_suppl.tex` — Two new supplementary sections added
+- `paper/draft_3/main.bib` — Two citations added
+
+### Problem
+Sections 3 (Methodology) and 4.2 (Implementation Details) were verbose and contained documentation-style language, repeated arguments across paragraphs, and tangential derivations that interrupted the main narrative flow. Six claim-calibration warnings were identified (metric axiom contradiction, overstated guarantees, hypothesized mechanisms stated as fact, loaded language, borderline single-factor attribution). Two citations were missing.
+
+### Changes applied
+
+**Section 3 (Methodology):**
+- Cut the 8-line roadmap paragraph; replaced with one-sentence preamble
+- Merged "Structured embedding" and "Orthogonal decomposition rationale" into one tighter paragraph with Supp. forward-ref
+- Tightened "Randers-type distance": removed redundant recovery-limit restatement; inlined drift-dim-scaling as one sentence with Supp. forward-ref
+- Tightened "Randers positivity": replaced "breaking the metric axiom" (contradicts disclaimer of metric status) with "producing non-physical negative scores that destabilize triplet mining"
+- Tightened "Identity-only alignment": merged two sentences making the same point
+- Tightened "Bidirectional triplet": cut obvious symmetric-case sentence; compressed from 8 lines to 5
+- Tightened "Drift norm regularization": removed redundant divergence explanation; removed duplicate hard-clamping contrast (already in Sec 3.2); added Boyd & Vandenberghe citation
+- Tightened "Domain-conditioned drift": replaced "simplicity bias" causal assertion with hedged observation; compressed where-clause; replaced "corrupting" with neutral "modifying"; compressed test-time paragraph to one sentence
+- Tightened "Interference analysis": replaced "documented to produce" with "observed to coincide with"; added single-factor attribution caveat per publication_facts.md
+
+**Section 4.2 (Implementation Details):**
+- Compressed backbone paragraph to one sentence
+- Compressed instance drift head: removed documentation-style parentheticals, ornamental phrases
+- Compressed domain-conditioned drift head: removed redundant norm-scaling restatement
+- Compressed training recipe: removed internal method names (SLERP, analytical); removed "when enabled" config-toggle language
+- Compressed batch construction: removed class name; replaced absolute gradient claim with hedged version
+- Compressed memory bank: removed "depending on configuration"; replaced repeated alignment rationale with cross-ref
+- Compressed evaluation: removed CLI flag name; removed "without retraining"
+
+**Supplementary (X_suppl.tex):**
+- Added Sec "Orthogonal Decomposition Rationale" with full degenerate-case argument and Bousmalis analogy
+- Added Sec "Drift Dimension Scaling Derivation" with Cauchy-Schwarz bound and gamma correction
+
+**Citations (main.bib):**
+- Added `zhong2017re` (Zhong et al. 2017, k-reciprocal encoding) — cited for reciprocal k-NN Jaccard weights
+- Added `boyd2004convex` (Boyd & Vandenberghe 2004, Convex Optimization) — cited for log-barrier penalty
+
+### Expected behavior
+- Sec 3 is ~1 column shorter while retaining all formal definitions and equations
+- Sec 4.2 is ~0.5 column shorter with no documentation-style language
+- All 6 WARN-level claim calibration issues resolved
+- Two missing citations substantiated
+- Derivations and rationale offloaded to supplementary with forward-refs from main text
+
+---
+
+## [2026-04-08] - Paper Draft 3: TikZ architecture figure rewrite (dense reference style)
+**Files Modified:** `paper/draft_3/fig_architecture.tex`
+**Files Created (earlier):** `.cursor/skills/tikz-academic-figure/SKILL.md`, `.cursor/agents/tikz-figure-reference-crawler.md`, `.cursor/agents/tikz-codebase-architecture-concretizer.md`, `.cursor/agents/tikz-qa-reviewer.md`
+
+### Problem Addressed
+The initial architecture figure had excessive whitespace, included legacy/inactive modules, and did not match the dense reference style requested. Losses were floating above the main flow rather than stacked on the right. Several arrow paths crossed through node interiors.
+
+### Changes Made
+- **`fig_architecture.tex`** completely rewritten:
+  - Dense layout modelled after the user's reference diagram: minimal whitespace, explicit sub-modules with math formulas inside blocks, tensor shape annotations on arrows.
+  - Legacy/inactive modules (alpha gate, domain triplet, cross-domain contrastive) **removed** from the diagram entirely.
+  - Input shows weak/strong augmentation split feeding the shared backbone.
+  - Drift head expanded to show all sub-modules: Domain Classifier, Softmax/τ, Embed+Proj, Gate g, ⊙, Residual MLP, +, σ-Gate, Gram–Schmidt.
+  - Losses stacked vertically in a dedicated right column: CE, Triplet (id-only, d_E), Alignment, Uniform, Domain (d_F, full), L_ω (log-barrier), Domain-tok CE.
+  - Grouping boxes for Identity Branch (blue) and Domain-Conditioned Drift Head (orange).
+  - Stop-gradient path from identity to domain classifier shown with dashed arrow and sg[z^id] label.
+  - Notation aligned with 3_methodology.tex after QA review: sg[z^id] (not hat), ‖ω‖ (not hat-z^ω) on barrier.
+  - Caption includes abstraction note about pool/BN ordering vs implementation.
+- **Agent/skill infrastructure** created in earlier pass (unchanged).
+
+### Expected Behavior
+`fig_architecture.tex` compiles cleanly with `pdflatex` (tested). Insert via `\input{fig_architecture}` in a document loading `tikz`, `xcolor`, `amsmath`, and TikZ libraries `positioning, fit, arrows.meta, calc, backgrounds, shapes.geometric`. Uses `figure*` with `\resizebox{\textwidth}{!}`.
+
+### Timestamp: 2026-04-08
+
+---
+
+## [2026-04-06] - Paper Draft 2: CVPR-style LaTeX table drafts produced (pre-draft artifacts)
+**Files Created:** `paper/draft_2/draft_table_main.tex`, `paper/draft_2/draft_table_supplementary.tex`
+
+### Problem Addressed
+Experiments section needs provenanced table drafts ready for insertion once `results_implementation_lock` is set. The `paper-table-formatter` skill was applied; user explicitly authorized including real metric values in these pre-draft artifacts despite `theory_first` being active.
+
+### Changes Made
+- `draft_table_main.tex`: Single `\resizebox{\columnwidth}{!}` booktabs table, 7 arms (Arm 1 baseline, 5 Arm 2 variants, Arm 3 Unified Finsler), columns = Method / Eval / mAP / Rank-1. All rows carry `% Provenance: job XXXXXX` comments. `\textbf{}` applied to Baseline (1a), 1a+1c, and Unified Finsler as candidate method rows (author must confirm final selection before submission).
+- `draft_table_supplementary.tex`: Two `table*` environments — Table A (FD training, eval-drift δ, 8 columns: Arm / Best cond. / Eucl. mAP / Finsler mAP / ΔmAP / Eucl. R1 / Finsler R1 / ΔR1) and Table B (ED training, same columns). Table B isolates the 1b arm ΔmAP = −6.1 diagnostic under Euclidean-domain training.
+
+### Expected Behavior
+Both files compile as standalone table fragments; import with `\input{draft_table_main}` / `\input{draft_table_supplementary}`. `siunitx` `S` column alignment is used for numeric columns; `\usepackage{siunitx,booktabs,multirow}` required in preamble.
+
+### Timestamp: 2026-04-06
+
+---
+
+## [2026-04-06] - Paper Draft 2: Methodology structural edits (EL-001–EL-004, CF-001–CF-007, citation)
+**Files Modified:** `paper/draft_2/markdowns/3_methodology.tex`, `paper/draft_2/markdowns/2_relatedwork.tex`, `paper/draft_2/markdowns/1_intro.tex`, `paper/draft_2/markdowns/main.bib`, `paper/draft_2/markdowns/X_suppl.tex` (new, replaces `X_suppl.md`)
+
+### Problem Addressed
+Multiple structural, notational, and citation issues identified in the triage round for `3_methodology.tex` required author-approved edits:
+- Prior narrative assumed a sequential development from Euclidean → domain Finsler → unified Finsler; code inspection confirmed both were parallel tests over the same `finsler_drift_dist`.
+- `alpha` parameter accepted by `finsler_drift_dist` in both BAU and ReNorm2 codebases is not used in the computation body; omega drift vector is the current learnable component.
+- Notation mixed superscript (`\mathbf{z}^{\mathrm{id}}`) and subscript (`\mathbf{x}_{\mathrm{id}}`) for split-embedding slices across equations.
+- `X_suppl.md` incorrectly stated alpha and omega "coexist in the final implementation".
+- Citation for LOO DG-ReID template attributed to "Luo et al." — correct first author is Zhao (zhao2021m3l).
+- Label collision `eq:finsler_distance` used in both related work and methodology.
+
+### Changes Made
+- **EL-001/EL-003 (Option B restructure + notation):** Reordered §3 sections — §3.2 now defines split embedding and $d_F$ first; §3.3 applies $d_F$ to domain objectives; §3.4 is interference analysis. All split-embedding slice notation standardized to superscript throughout.
+- **EL-001 bridging paragraph:** Integrated bridging derivation (canonical Randers → sample-adaptive midpoint form) into the `\paragraph{Randers-type distance.}` in §3.2. Finsler metric disclaimer moved here from related work (CF-006).
+- **EL-002:** Replaced `\paragraph{Asymmetric domain loss.}` placeholder with full $\mathcal{L}_{\mathrm{dom}}$ formulation using $d_F$ directly (no alpha).
+- **EL-004:** Replaced `\paragraph{Learnable Euclidean–Asymmetric Interpolation.}` with a one-sentence supplementary pointer. `X_suppl.md` converted to `X_suppl.tex` (CF-003) with A.2 rewritten to remove "coexist" claim, A.3 updated to state alpha pegs to $\alpha_{\max}$ in all runs (shortcut behavior), A.4 reframed as research stepping stone superseded by omega architecture.
+- **CF-001:** Fixed `hermans2017defense` from `@inproceedings` (arXiv booktitle) to `@misc` with proper eprint fields.
+- **CF-002:** Renamed `\label{eq:finsler_distance}` → `\label{eq:finsler_dist_canonical}` in `2_relatedwork.tex`; methodology `eq:finsler_distance` label now free for $d_F$.
+- **CF-004:** Updated `1_intro.tex` line 8 to forward-reference `\ref{subsec:interference_analysis}` instead of stating quantitative claim inline.
+- **CF-005:** Shortened "inductive bias / finite capacity" phrase in `2_relatedwork.tex` §2.3.
+- **CF-006:** Moved Finsler manifold disclaimer from `2_relatedwork.tex` §2.4 last paragraph into methodology §3.2 bridging content; replaced with forward reference in related work.
+- **CF-007:** Trimmed redundant §2.2 "Euclidean features / asymmetry via score" explanation to a forward reference.
+- **Citation:** Verified and added `zhao2021m3l` (Zhao et al., CVPR 2021 — first author is Zhao, not Luo) to `main.bib`; inserted `\cite{zhao2021m3l}` alongside `\cite{cho2024generalizable}` in §3.4.
+- **Writing coach pass:** Applied CVPR-style concision edits (claim-first topic sentences, removed narration, compressed proxy-chain clause, hedged "produces" → "is documented to produce" in theory-first section).
+
+### Expected Behavior
+`3_methodology.tex` compiles with no forward-reference tension: $d_F$ is fully defined before use. All citations are well-formed. Supplementary cross-references to `\ref{sec:suppl_alpha}` resolve via the new `X_suppl.tex`.
+
+---
+
+**Timestamp:** 2026-04-05
+
+## [2026-04-05] - Sbatch: `sweep_eval_drift_true_consecutive` repo root + checkpoint discovery
+**Files Modified:** `sbatch/sweep_eval_drift_true_consecutive.sbatch`
+
+### Problem Addressed
+A consecutive eval job reported **Found 0 checkpoints** because discovery used a hardcoded `ROOT` and/or relative `find` paths that did not match the directory Slurm used as submit cwd, or because a missing sweep subtree caused brittle `find` behavior.
+
+### Modification
+- Resolve **`ROOT`** as `REPO_ROOT` (env) → `SLURM_SUBMIT_DIR` → parent of `sbatch/` via `BASH_SOURCE`.
+- Search each sweep tree with **`find "${ROOT}/${d}"`** separately; skip missing dirs with a warning.
+- If zero `model_best.pth.tar` files: print **diagnostics** (subdirs + sample `*.pth.tar`) and **exit 1** with fix hints; optional commented **`#SBATCH --chdir=...`** in the header.
+- Document **`REPO_ROOT=... sbatch ...`** override.
+
+### Expected Behavior
+Checkpoints are found when the user submits from the repo root or sets `REPO_ROOT` / `--chdir`; empty runs fail fast with actionable output instead of a silent zero-length sweep.
+
+**Timestamp:** 2026-04-05
+
+### Follow-up (same day)
+**Problem:** Discovery still found 0 files because **`examples/train_bau.py` saves `best.pth`**, not `model_best.pth.tar` (see `torch.save(..., 'best.pth')` around the best-mAP hook).
+
+**Modification:** Both `sweep_eval_drift_true_consecutive.sbatch` and `sweep_eval_drift_true.sbatch` now search for **`best.pth` or `model_best.pth.tar`**, excluding `code_snapshot/`. Array script `ROOT` resolution aligned with the consecutive script (`REPO_ROOT` / `SLURM_SUBMIT_DIR` / script parent).
+
+**Timestamp:** 2026-04-05
+
 ## [2026-03-30] - Metrics markdown: `sweep_unified_finsler_idea1_gap` (job 1516604)
 **Files Created:** `results/sweep_unified_finsler_idea1_gap_metrics.md`
 
@@ -487,3 +1129,227 @@ The new markdown file provides a clear, theory-grounded explanation of why expli
 *   **Modifications:** Created a new markdown document at `bau/docs/finsler_disentanglement_analysis.md`.
 *   **Problem:** The theoretical viability, utility of the drift vector during retrieval, and experimental roadmap for Finsler asymmetry in DG-ReID needed to be clearly structured, consolidated, and documented following an in-depth analytical discussion. 
 *   **Expected Behavior:** Researchers and collaborators can now reference `bau/docs/finsler_disentanglement_analysis.md` for a complete, exhaustive summary of the "representation disentanglement" paradigm, the resolution of the `--eval-drift` misconception, and the concrete 3-phase experimental roadmap (Toy Dataset -> Disentanglement Validation -> Asymmetric Eval Activation) moving forward.
+
+### 2026-04-06 10:44:24
+*   **Modifications:** Reformatted `results/eval_drift_true_finsler_ranking_table.md`.
+*   **Problem:** The original single 8-column table (2 training regimes × 2 eval modes × 2 metrics × 2 drift conditionings) was too dense for presentation. All information was present but not digestible.
+*   **Expected Behavior:** The file now follows a two-primary-table + two-supplementary-table structure: **Table A** (Finsler-domain training, best-of-conditioning, mAP/R1 + Δ), **Table B** (Euclidean-domain training, same format — highlights the catastrophic −6.1 mAP for 1b), **Supp. S1** (full per-conditioning breakdown for reproducibility), **Supp. S2** (Finsler-eval R5/R10). Best conditioning is selected per arm by Finsler-eval mAP.
+
+## [2026-04-06] — Curate experiment provenance into publication_facts.md and create narrative_relevance_map.md
+**Files Modified:** `.cursor/paper/publication_facts.md` (appended), `paper/draft_2/narrative_relevance_map.md` (created)
+**Functions Altered:** N/A (documentation)
+
+### Problem Addressed
+`publication_facts.md` contained only 3 rows from the early job-1512947 sweep; 8 subsequent experiment batches (jobs 1516935, 1517230, 1516604, 1518384, 1481835, 1482168, 1483098, 1485934, 1512315) were not reflected. No mapping between experiments and the ablation arms defined in `4_experiments.md` existed.
+
+### Modification
+Appended 8 new subsections to `Reported_metrics_with_provenance` in `publication_facts.md`:
+- Full Idea-1 re-run under Finsler-domain training (job 1516935 + gap rows 1516604)
+- Full Idea-1 re-run under Euclidean-domain training (job 1517230 + gap rows 1516604)
+- eval-drift-true sweep tables A/B (job 1518384)
+- Learnable alpha sweep (jobs 1481835, 1482168): alpha converges to 0.098–0.150 regardless of init
+- Finsler duet 5-run RNG sweep (jobs 1483098, 1485934): no statistically significant Finsler gain
+- S1 domain-conditioned routing sweep (job 1512315): all 12 runs below 1a baseline (40.3–41.8% mAP)
+- Early Euclidean ablation baselines (ablationEuclidean-P3.csv, ablationEuclideanPaper.csv, ablationHyperbolic.md) with provenance caveat
+Created `paper/draft_2/narrative_relevance_map.md` mapping every experiment to ablation arms 1–4 with primary/secondary/irrelevant/figure-candidate tables.
+
+### Expected Behavior
+Paper agents can now directly look up which logged experiment corresponds to which ablation arm, with log paths and job IDs. `publication_facts.md` is current. `narrative_relevance_map.md` serves as the reference for table population once `results_implementation_lock` is set.
+
+## [2026-04-06 20:39 UTC] - Experiments section rewrite, agent architecture expansion, and experiment curation pipeline
+
+**Files Modified:**
+- `paper/draft_2/markdowns/4_experiments.md`
+- `.cursor/paper/review_style_directives.md`
+- `.cursor/agents/paper-experiments-curator.md`
+- `.cursor/paper/GUIDE.md`
+
+**Files Created:**
+- `.cursor/skills/paper-table-formatter/SKILL.md`
+- `paper/draft_2/narrative_relevance_map.md`
+- `paper/draft_2/draft_table_main.tex`
+- `paper/draft_2/draft_table_supplementary.tex`
+- `paper/draft_2/figure_audit.md`
+
+### Problem Addressed
+
+**Track A — Small edits to `4_experiments.md`:**
+1. Protocol description was too vague ("classic DG pattern") and lacked an explicit note that the paper uses a subset of Protocol 2. Cross-view AG-ReIDv2 sentence was unjustified at draft stage.
+2. "exact split names and filters are listed in the supplement when numerics are locked" was placeholder prose in the body, violating the draft standard.
+3. `## Implementation sketch` used bold label-colon fragment headers (`**Backbone.**`, `**Optimization.**`, `**Asymmetry.**`) — not academic prose; same issue in `## Qualitative analysis`.
+
+**Track B — Agent architecture gap:**
+No existing agent mapped experiments to the paper narrative, and no skill produced CVPR-ready LaTeX tables from provenanced metrics. The default pipeline in `GUIDE.md` had no quantitative-section workflow.
+
+### Modifications
+
+**`4_experiments.md`:** Protocol note now explicitly names Protocol 2, M+MS+CS→C3, exploratory scope, and computational constraint. AG-ReIDv2 moved to `%TODO`. Supplement placeholder replaced with `%TODO`. Implementation sketch rewritten as single academic prose paragraph (backbone → drift head → loss stack → α scheduling → eval toggle). Qualitative analysis rewritten as declarative prose paragraph with `%TODO`.
+
+**`review_style_directives.md`:** Added three new global directives (11–13): no placeholder prose in body, no bold label-colon fragment headers, no bullet-enumerated qualitative-analysis plans.
+
+**`paper-experiments-curator.md`:** Extended with Output 2 — produces `paper/draft_2/narrative_relevance_map.md` mapping each experiment to ablation arms in `4_experiments.md` (primary / secondary / irrelevant / figure candidates).
+
+**`paper-table-formatter` skill:** New skill encoding CVPR `booktabs` table production from `narrative_relevance_map.md` + `results/*.md|csv`; phase-dependent behavior (structure-only under `theory_first`; provenanced numbers under `results_implementation_lock`); anti-pattern rules.
+
+**`GUIDE.md`:** Added Stage 0 (experiment → narrative mapping, table formatter) before the existing Stage 1 pipeline; updated mermaid diagram; added `paper-table-formatter` to skills list.
+
+**Artifact outputs:**
+- `narrative_relevance_map.md`: 12 primary candidates, 8 secondary, irrelevant/superseded table, 10 figure candidates with readiness flags
+- `draft_table_main.tex`: 7-arm ablation table (Arm 1–3) with provenanced metrics and `%TODO` gates
+- `draft_table_supplementary.tex`: eval-drift δ tables A and B (FD and ED training) for supplementary
+- `figure_audit.md`: per-figure assessment for 9 expected plots; all rated NEEDS_POSTPROCESSING; rcParams template; 8-item priority action list
+
+### Expected Behavior
+
+Paper agents following the GUIDE.md pipeline will now: (1) run Stage 0 before drafting quantitative sections, producing a narrative map and LaTeX table skeleton; (2) apply the 13 review_style_directives globally; (3) have access to provenanced table drafts for the experiments section once `results_implementation_lock` is set.
+
+---
+
+## 2026-04-08T19:06:26Z — Expand Methodology (Sec 3) and Implementation Details (Sec 4.2); Create Supplementary Material
+
+### Problem
+
+Section 3 (Methodology) covered only four subsections (Euclidean baseline, asymmetric Finsler distance, domain objectives, interference analysis) and omitted several implemented methodological contributions: orthogonal decomposition rationale, Randers positivity constraint analysis, drift dimension scaling, identity-only alignment restriction, bidirectional triplet loss, drift norm regularization (log barrier), and domain-conditioned drift prior. Section 4.2 (Implementation details) was a single dense paragraph lacking structured coverage of the drift head architecture, training recipe, batch construction, memory bank, and evaluation protocol. No supplementary material existed for the learnable alpha, alternative drift integration methods, norm constraint alternatives, k-NN/uniform loss corrections, IN ablation design, or ReNorm2 port.
+
+### Modifications
+
+**`paper/draft_3/3_methodology.tex`** — Expanded from ~60 to ~105 lines (theory only):
+- Sec 3.2 (Asymmetric Finsler Distance): Added four new `\paragraph{}` blocks: orthogonal decomposition rationale (Gram-Schmidt, domain separation analogy), Randers positivity constraint (||ω|| < 1, metric axiom), drift dimension scaling (Cauchy-Schwarz bound, γ correction), identity-only alignment (eq. for restricted alignment loss, k-NN on identity only).
+- New Sec 3.3 (Bidirectional asymmetric triplet): Formalized D^T mining under asymmetric d_F; eq. for L_tri^bi.
+- New Sec 3.4 (Drift norm regularization): Logarithmic barrier penalty; gradient analysis at boundary.
+- New Sec 3.5 (Domain-conditioned drift prior): Decomposition ω = ω_dom + λ·ω_res; domain prior with soft assignment, sigmoid gate, stop-gradient; auxiliary CE loss; evaluation-time generalization.
+- Existing Sec 3.3 (Domain objectives) renumbered to 3.6; Sec 3.4 (Interference analysis) to 3.7. Section preamble updated with all new subsection references.
+
+**`paper/draft_3/4_experimentalResults.tex`** — Sec 4.2 expanded from 1 paragraph to 7 structured `\paragraph{}` blocks:
+- Backbone and identity branch, instance-conditioned drift head (2-layer MLP, sigmoid gating, zero init, pre-BN input, Gram-Schmidt), domain-conditioned drift head, training recipe (loss stack, drift LR ×0.05, gradient clipping max_norm 1.0), batch construction (RandomMultipleGallerySampler cross-camera), memory bank, evaluation (eval-drift toggle).
+
+**`paper/draft_3/5_supplementary.tex`** — New file with 6 appendix sections:
+- A: Learnable alpha (centered sigmoid parameterization, gradient starvation, convergence)
+- B: Alternative drift integration (spherical trapezoidal, SLERP Riemann sum, analytical parallel transport, numerical stability, empirical outcome)
+- C: Drift norm constraint alternatives (hard clamping, tanh, sigmoid, LogSumExp)
+- D: k-NN weight contamination and uniform loss corrections
+- E: InstanceNorm ablation design
+- F: Cross-framework validation (ReNorm2 port, negative result)
+
+**`paper/draft_3/main.bib`** — Added `bousmalis2016domain` (Domain Separation Networks, NeurIPS 2016).
+
+All mathematical expressions verified against codebase: `bau/loss/triplet.py` (finsler_drift_dist symmetric_trapezoidal, AlphaParameter, TripletLoss bidirectional, scaling_factor), `bau/models/model.py` (FinslerDriftHead, DomainConditionedDriftHead, scale_drift_vector sigmoid gating, orthogonalization), `bau/trainers.py` (identity-only alignment, uniform loss restriction, k-NN on identity features, omega_loss log barrier, gradient clipping).
+
+### Expected Behavior
+
+The paper draft now documents all implemented methodological contributions with a strict theory (Sec 3) vs. practice (Sec 4.2) boundary. Cross-references between sections are consistent. The supplementary material covers negative results and design alternatives that inform the ablation narrative.
+
+---
+
+## 2026-04-08T19:14:23Z — Consolidate Supplementary; Purge Legacy Alpha References from Main Text
+
+### Problem
+
+1. Two supplementary files existed: the original `X_suppl.tex` (with a well-framed alpha section documenting it as a superseded design step) and a newly generated `5_supplementary.tex` (with sections B--F on drift integration, norm constraints, k-NN/uniform fixes, IN ablation, ReNorm2 port). These needed to be merged.
+2. The main text (abstract, intro, methodology) still contained language implying a learnable scalar alpha parameter as an active component of the distance function (e.g., "bounded learnable weight that interpolates toward the Euclidean triplet regime", "learnable Euclidean-asymmetry interpolation", "A scalar variant $d_F^\alpha$..."). Since alpha is a legacy/superseded design documented only in the supplementary, these references were misleading.
+
+### Modifications
+
+**`paper/draft_3/X_suppl.tex`** — Appended five new sections after the existing alpha documentation:
+- Sec 2: Alternative Drift Integration Methods (spherical trapezoidal, SLERP, analytical, numerical stability, empirical outcome)
+- Sec 3: Drift Norm Constraint Alternatives (hard clamping, tanh, sigmoid, LogSumExp)
+- Sec 4: k-NN Weight Contamination and Uniform Loss Corrections
+- Sec 5: InstanceNorm Ablation Design
+- Sec 6: Cross-Framework Validation (ReNorm2 Port)
+
+**`paper/draft_3/5_supplementary.tex`** — Deleted (redundant after merge into X_suppl.tex).
+
+**`paper/draft_3/3_methodology.tex`** — Removed the sentence "A scalar variant $d_F^\alpha = d_E + \alpha \cdot \langle \mathbf{z}^{\omega}, \cdot \rangle$, which recovers Euclidean at $\alpha{=}0$, is developed and analyzed in Sec.~\ref{sec:suppl_alpha}." from the Randers-type distance paragraph.
+
+**`paper/draft_3/1_intro.tex`** — Reworded two passages:
+- "with a bounded learnable weight that interpolates toward the Euclidean triplet regime" → "that recovers Euclidean geometry when the drift vanishes, with norm-constrained drift initialization ensuring a smooth departure from the symmetric baseline"
+- "learnable Euclidean-asymmetry interpolation" → "norm-constrained drift that recovers Euclidean geometry at initialization"
+
+**`paper/draft_3/0_abstract.tex`** — Reworded "bounded learnable interpolation toward the Euclidean triplet regime" → "norm-constrained drift initialization that recovers the Euclidean triplet regime at startup".
+
+### Expected Behavior
+
+The main text (abstract, intro, methodology, experiments) no longer references the scalar alpha parameter. The alpha design is documented exclusively in the supplementary (X_suppl.tex Sec 1) as a superseded stepping stone. All cross-references between main text and supplementary resolve correctly.
+
+## 2026-04-08T21:40:24Z — Implement Experiments 1d and 1e: Camera-Conditioned Drift Losses
+
+### Problem
+
+The Idea-1 ablation series (1a–1c) tested auxiliary losses on the drift subspace but did not test the complementary hypothesis: whether drift vectors should cluster by **camera** (encoding shared camera-specific artifacts) rather than by identity. The best-performing auxiliary (1a+1c) encourages same-PID cross-camera drift alignment—the opposite of the original intuition. Two new experiments extend the investigation:
+
+- **1d**: Same-camera drift attraction (L2² on drift for same-camera pairs, any PID)
+- **1e**: Cross-camera drift uniformity (Wang–Isola log-mean-exp Gaussian potential on L2-normalized drift for cross-camera pairs)
+
+Together, 1d+1e form an alignment-uniformity decomposition on the drift space conditioned on camera labels, structurally parallel to BAU's alignment+uniformity on the identity space conditioned on PID labels.
+
+### Modifications
+
+**`bau/trainers.py`**:
+- Added `drift_same_camera_attraction_loss(self, drift_w, cids)`: mean L2² over same-camera pairs (diagonal excluded). Constraint set C_1d = {(i,j) : c_i = c_j, i ≠ j}.
+- Added `drift_cross_camera_uniformity_loss(self, drift_w, cids, t=2.0)`: Wang–Isola uniformity on L2-normalized drift for cross-camera upper-triangle pairs. Returns log(mean(exp(-t * dist²))). Constraint set C_1e = {(i,j) : c_i ≠ c_j, i < j}.
+- Extended `BAUTrainer.__init__` with parameters: `use_drift_same_cam_attract`, `drift_same_cam_attract_weight`, `use_drift_cross_cam_uniform`, `drift_cross_cam_uniform_weight`, `drift_cross_cam_uniform_t`.
+- Extended `train()` loop: compute both losses on `f_w_drift` and `cids`, add to total loss sum, add AverageMeter tracking, W&B step logging, and print-line entries.
+
+**`examples/train_bau.py`**:
+- Added 5 CLI arguments: `--use-drift-same-cam-attract`, `--drift-same-cam-attract-weight` (default 0.1), `--use-drift-cross-cam-uniform`, `--drift-cross-cam-uniform-weight` (default 0.1), `--drift-cross-cam-uniform-t` (default 2.0).
+- Passed all through to `BAUTrainer` constructor.
+
+**`sbatch/sweep_loss_ablation_Idea1_1d1e.sbatch`** (new):
+- 10-job array (5 arms × 2 drift conditioning).
+- EXP 0: baseline 1a only (reference). EXP 1: 1a+1d. EXP 2: 1a+1e. EXP 3: 1a+1d+1e. EXP 4: 1a+1c+1d+1e.
+- Each crossed with instance and domain drift conditioning.
+- Base recipe matches `sweep_loss_ablation_Idea1_extensions.sbatch`: resnet50_finsler, M+MS+CS→C3, batch 256, 60 epochs, Finsler domain loss (full memory bank), omega reg (w=1.5), identity triplet only, eval-drift false.
+
+**`results/Idea1_Experiments_1d1e_Analysis.md`** (new):
+- Paper-ready analysis document (theory_first phase) with: orthogonal decoupling investigation (Gram–Schmidt guarantees and limitations), motivation from 1a–1c, reinterpretation of the 1c result, full mathematical formalization of 1d and 1e, justification of Wang–Isola over alternatives (MHE, DPP, VICReg, reversed MMD), expected interactions and failure modes.
+
+### Expected Behavior
+
+New CLI flags are inactive by default (no behavioral change to existing runs). When activated, 1d pulls same-camera drift vectors together and 1e pushes cross-camera drift directions apart on the unit hypersphere. The sweep produces results directly comparable to slide 9 of the 03.04.2026 meeting deck (same base recipe, same eval protocol). Potential failure modes: drift collapse under strong 1d weight, gradient vanishing in 1e if drift vectors are already well-separated.
+
+---
+
+## 2026-04-10 — Remove L2 normalization from 1e (cross-camera drift uniformity)
+
+### Problem
+
+The Wang–Isola uniformity loss in `drift_cross_camera_uniformity_loss` projected drift vectors onto the unit hypersphere via `F.normalize` before computing the Gaussian potential. This discards drift magnitude, which carries semantic content in the Randers distance (the asymmetric contribution is ‖ω‖·⟨ω̂, v̂⟩). The normalization also creates an asymmetry between 1d (operates on raw drift in the ball) and 1e (operates on directions only), leaving the cross-camera norm distribution unsupervised. The hyperspherical uniformity guarantee from Wang & Isola (2020) does not transfer to the open Randers ball where drift vectors actually live.
+
+### Modifications
+
+**`bau/trainers.py`**:
+- Commented out `drift_norm = F.normalize(drift_w, p=2, dim=1)` in `drift_cross_camera_uniformity_loss`. The Gaussian potential now operates on raw drift vectors: exp(-t·‖ω_i - ω_j‖²) instead of exp(-t·‖ω̂_i - ω̂_j‖²).
+
+**`sbatch/sweep_1e_no_norm.sbatch`** (new):
+- 8-job array (4 arms × 2 drift conditioning): baseline, 1a+1e, 1a+1d+1e, 1a+1c+1d+1e.
+- Identical recipe to `sweep_loss_ablation_Idea1_1d1e.sbatch`. The only code difference is the removed normalization. Baseline arms included for direct comparison.
+- W&B tag `sweep-1e-no-norm` distinguishes from the original `sweep-loss-ablate-1d1e` runs.
+
+### Expected Behavior
+
+The 1e loss now repels cross-camera drift vectors in both direction and magnitude within the Randers ball, rather than only repelling directions on the hypersphere. This makes 1e geometrically consistent with 1d (both operate in the native drift space). The temperature parameter t=2.0 may need retuning since the scale of ‖ω_i - ω_j‖² in the ball (max ~3.6 for max_norm=0.95) differs from the hyperspherical scale (max 4.0 for unit vectors).
+
+---
+
+## 2026-04-10 — Auxiliary loss configuration sweep (Unified Finsler focus)
+
+### Problem
+
+Prior sweeps tested drift auxiliaries (1c, 1d, 1e) exclusively under the 1a regime (`--identity-triplet-only`, Euclidean triplet on identity slice). The Unified Finsler baseline (full d_F triplet, no `--identity-triplet-only`) matches 1a on mAP (44.1) and beats it on R1 (44.0–44.3), but has never been combined with the drift auxiliaries that boosted R1 under 1a (1c → 44.9 R1, 1d → 44.5 R1 under domain conditioning). Additionally, `--eval-drift true` and `--bidirectional-triplet` were not tested on the strongest 1a+1d arm. The paper's interference thesis (Section 3.7) lacks an ablation row for L_tri^dom under Unified Finsler.
+
+### Modifications
+
+**`sbatch/sweep_auxiliary_loss_configs.sbatch`** (new):
+- 12-job array (6 configs × 2 drift conditioning: instance/domain).
+- All configs use `--eval-drift true`, `--use-omega-reg` (w=1.5), `--memory-bank-mode full`.
+- EXP 0: Unified Finsler + 1d (w=0.1) + bidirectional. Tests whether Unified base + strongest R1 auxiliary exceeds both individually.
+- EXP 1: Unified Finsler + 1c (w=0.1). Tests Unified base + highest-R1 auxiliary (44.9 under 1a).
+- EXP 2: Unified Finsler + 1c + 1d (w=0.1 each). Complementary drift pair without 1e (which caused stacking degradation). Tests whether camera-clustered drift subspace helps under Unified.
+- EXP 3: 1a + 1d (w=0.1) + bidirectional + eval-drift true. Adds two untested flags to the proven 1a+1d arm (previously run with eval-drift false, no bidirectional).
+- EXP 4: Unified Finsler + 1d (w=0.3) + bidirectional. Weight sensitivity test — 3× the default 1d weight. Comparison with EXP 0 isolates weight effect.
+- EXP 5: Unified Finsler + L_tri^dom (camera mining, w=1.0) + bidirectional. Paper Section 3.7 interference ablation — tests whether the asymmetric domain triplet degrades Unified Finsler as it did under 1a.
+- Base recipe: resnet50_finsler, M+MS+CS→C3, batch 256, 60 epochs, symmetric trapezoidal drift, omega reg w=1.5.
+
+### Expected Behavior
+
+EXP 0/1 are the highest-priority runs: if Unified Finsler + 1d or 1c under domain conditioning exceeds 44.1 mAP or 44.9 R1, it establishes a new best. EXP 2 tests whether 1c+1d avoids the degradation seen in 1c+1d+1e (the uniformity objective 1e was the likely conflict source). EXP 3 should show marginal gains from eval-drift and bidirectional on the already-strong 1a+1d arm. EXP 4 probes whether 0.1 was suboptimal for 1d. EXP 5 is expected to degrade (validating the interference thesis), but if it doesn't, the interference is 1a-regime-specific and the paper narrative needs revision.

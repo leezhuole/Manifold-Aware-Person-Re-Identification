@@ -13,7 +13,8 @@
 # ╔════════════════════════════════════════════════════════════════════╗
 # ║  Evaluation Sweep: --eval-drift true                               ║
 # ║                                                                    ║
-# ║  This script locates `model_best.pth.tar` across the three Idea-1  ║
+# ║  This script locates `best.pth` / `model_best.pth.tar` under the    ║
+# ║  three Idea-1 sweep log trees (train_bau.py writes best.pth).       ║
 # ║  sweeps, dynamically parses the required architectural hooks       ║
 # ║  (e.g. drift conditioning, num domains) from the directory name,   ║
 # ║  and evaluates the model with the Finsler drift explicitly         ║
@@ -24,18 +25,28 @@
 # ╚════════════════════════════════════════════════════════════════════╝
 
 set -euo pipefail
-ROOT=/home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification
+if [ -n "${REPO_ROOT:-}" ]; then
+  ROOT="${REPO_ROOT}"
+elif [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+  ROOT="${SLURM_SUBMIT_DIR}"
+else
+  _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  ROOT="$(cd "${_SCRIPT_DIR}/.." && pwd)"
+fi
 mkdir -p "${ROOT}/logs/slurm_logs"
 
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate BAU
 cd "${ROOT}"
 
-# 1. Gather all checkpoints from the three Idea-1 sweeps
+# 1. Gather checkpoints (train_bau.py writes best.pth; legacy runs may use model_best.pth.tar)
 CHECKPOINTS=()
-while IFS=  read -r -d $'\0'; do
-    CHECKPOINTS+=("$REPLY")
-done < <(find logs/sweep_loss_ablation_Idea1_2 logs/sweep_loss_ablation_Idea1_EuclideanDom_2 logs/sweep_unified_finsler_idea1_gap -name "model_best.pth.tar" -print0 | sort -z)
+for _d in logs/sweep_loss_ablation_Idea1_2 logs/sweep_loss_ablation_Idea1_EuclideanDom_2 logs/sweep_unified_finsler_idea1_gap; do
+  [ -d "${ROOT}/${_d}" ] || continue
+  while IFS= read -r -d '' f; do CHECKPOINTS+=("$f"); done < <(
+    find "${ROOT}/${_d}" -type f \( -name "best.pth" -o -name "model_best.pth.tar" \) ! -path "*/code_snapshot/*" -print0 2>/dev/null || true)
+done
+mapfile -t CHECKPOINTS < <(printf '%s\n' "${CHECKPOINTS[@]}" | sort -u)
 
 if [ "${SLURM_ARRAY_TASK_ID}" -ge "${#CHECKPOINTS[@]}" ]; then
     echo "Task ID ${SLURM_ARRAY_TASK_ID} exceeds available checkpoints (${#CHECKPOINTS[@]}). Exiting cleanly."

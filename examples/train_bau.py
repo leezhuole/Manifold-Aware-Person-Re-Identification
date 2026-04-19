@@ -248,7 +248,13 @@ def main():
 
 def main_worker(args):
     global best_mAP
-    cudnn.benchmark = True
+    # benchmark=True lets cuDNN profile convolution algorithms and pick the fastest.
+    # That selection is hardware-dependent: different GPU models choose different routines,
+    # causing floating-point divergence that compounds into ~1pp mAP variance across seeds
+    # even with identical code and the same seed value.  When a seed is provided,
+    # deterministic=True (set in main()) is already active; benchmark must be False for it
+    # to have cross-hardware effect.
+    cudnn.benchmark = args.seed is None
 
     os.makedirs(args.logs_dir, exist_ok=True)
     sys.stdout = Logger(osp.join(args.logs_dir, 'log.txt'))
@@ -567,7 +573,12 @@ def main_worker(args):
                          domain_triplet_mining_label=args.domain_triplet_mining_label,
                          use_drift_only_cross_contrastive=args.use_drift_only_cross_contrastive,
                          drift_only_cross_contrastive_weight=args.drift_only_cross_contrastive_weight,
-                         use_euclidean_domain_loss=args.use_euclidean_domain_loss)
+                         use_euclidean_domain_loss=args.use_euclidean_domain_loss,
+                         use_drift_same_cam_attract=args.use_drift_same_cam_attract,
+                         drift_same_cam_attract_weight=args.drift_same_cam_attract_weight,
+                         use_drift_cross_cam_uniform=args.use_drift_cross_cam_uniform,
+                         drift_cross_cam_uniform_weight=args.drift_cross_cam_uniform_weight,
+                         drift_cross_cam_uniform_t=args.drift_cross_cam_uniform_t)
     
     log("Trainer constructed", level=2)
 
@@ -841,6 +852,34 @@ if __name__ == '__main__':
         type=float,
         default=0.1,
         help='weight for drift-only cross-camera contrastive',
+    )
+    parser.add_argument(
+        '--use-drift-same-cam-attract',
+        action='store_true',
+        help='L2 drift attraction for same-camera pairs regardless of PID (Idea 1d)',
+    )
+    parser.add_argument(
+        '--drift-same-cam-attract-weight',
+        type=float,
+        default=0.1,
+        help='weight for same-camera drift attraction loss',
+    )
+    parser.add_argument(
+        '--use-drift-cross-cam-uniform',
+        action='store_true',
+        help='Wang-Isola uniformity on L2-normalized drift for cross-camera pairs (Idea 1e)',
+    )
+    parser.add_argument(
+        '--drift-cross-cam-uniform-weight',
+        type=float,
+        default=0.1,
+        help='weight for cross-camera drift uniformity loss',
+    )
+    parser.add_argument(
+        '--drift-cross-cam-uniform-t',
+        type=float,
+        default=2.0,
+        help='temperature for cross-camera drift uniformity Gaussian kernel',
     )
     parser.add_argument('--no-uniform', action='store_true', help='disable uniformity loss')
     parser.add_argument('--no-domain', action='store_true', help='disable domain loss')

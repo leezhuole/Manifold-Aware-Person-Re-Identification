@@ -32,7 +32,10 @@ class BAUTrainer(object):
                  use_domain_triplet=False, domain_triplet_weight=1.0, domain_triplet_margin=None,
                  domain_triplet_mining_label='camera',
                  use_drift_only_cross_contrastive=False, drift_only_cross_contrastive_weight=0.1,
-                 use_euclidean_domain_loss=False):
+                 use_euclidean_domain_loss=False,
+                 use_drift_same_cam_attract=False, drift_same_cam_attract_weight=0.1,
+                 use_drift_cross_cam_uniform=False, drift_cross_cam_uniform_weight=0.1,
+                 drift_cross_cam_uniform_t=2.0):
         
         """
         Note that static alpha is not used during training. It is only set as a default when no alpha_module is provided
@@ -104,6 +107,11 @@ class BAUTrainer(object):
         self.use_drift_only_cross_contrastive = use_drift_only_cross_contrastive
         self.drift_only_cross_contrastive_weight = drift_only_cross_contrastive_weight
         self.use_euclidean_domain_loss = use_euclidean_domain_loss
+        self.use_drift_same_cam_attract = use_drift_same_cam_attract
+        self.drift_same_cam_attract_weight = drift_same_cam_attract_weight
+        self.use_drift_cross_cam_uniform = use_drift_cross_cam_uniform
+        self.drift_cross_cam_uniform_weight = drift_cross_cam_uniform_weight
+        self.drift_cross_cam_uniform_t = drift_cross_cam_uniform_t
 
         # Finsler space parameter
         self.alpha = alpha
@@ -129,6 +137,8 @@ class BAUTrainer(object):
         losses_xdom_contrast = AverageMeter()
         losses_tri_dom = AverageMeter()
         losses_drift_xcontrast = AverageMeter()
+        losses_drift_same_cam = AverageMeter()
+        losses_drift_cross_cam_uniform = AverageMeter()
         precisions = AverageMeter()
 
         time.sleep(1)
@@ -280,6 +290,20 @@ class BAUTrainer(object):
                 else:
                     loss_drift_xcontrast = torch.tensor(0.0, device=f.device)
 
+                if self.use_drift_same_cam_attract and f_w_drift is not None:
+                    loss_drift_same_cam = self.drift_same_cam_attract_weight * self.drift_same_camera_attraction_loss(
+                        f_w_drift, cids
+                    )
+                else:
+                    loss_drift_same_cam = torch.tensor(0.0, device=f.device)
+
+                if self.use_drift_cross_cam_uniform and f_w_drift is not None:
+                    loss_drift_cross_cam_uniform = self.drift_cross_cam_uniform_weight * self.drift_cross_camera_uniformity_loss(
+                        f_w_drift, cids, t=self.drift_cross_cam_uniform_t
+                    )
+                else:
+                    loss_drift_cross_cam_uniform = torch.tensor(0.0, device=f.device)
+
                 if self.use_domain_triplet and self.criterion_tri_domain is not None:
                     if domain_triplet_loader is not None:
                         dom_batch = domain_triplet_loader.next()
@@ -320,6 +344,7 @@ class BAUTrainer(object):
                     loss_ce + loss_tri + self.lam * total_align + loss_uniform + loss_domain
                     + loss_omega + loss_domain_token + loss_xdom_contrast
                     + loss_drift_xcontrast + loss_tri_dom
+                    + loss_drift_same_cam + loss_drift_cross_cam_uniform
                 )
 
             if torch.isnan(loss):  # early exit if instability appears
@@ -355,6 +380,8 @@ class BAUTrainer(object):
             losses_xdom_contrast.update(loss_xdom_contrast.item())
             losses_tri_dom.update(loss_tri_dom.item())
             losses_drift_xcontrast.update(loss_drift_xcontrast.item())
+            losses_drift_same_cam.update(loss_drift_same_cam.item())
+            losses_drift_cross_cam_uniform.update(loss_drift_cross_cam_uniform.item())
             precisions.update(prec[0])
 
             batch_time.update(time.time() - end)
@@ -378,6 +405,8 @@ class BAUTrainer(object):
                         'train/loss_xdom_contrast': losses_xdom_contrast.val,
                         'train/loss_tri_dom': losses_tri_dom.val,
                         'train/loss_drift_xcontrast': losses_drift_xcontrast.val,
+                        'train/loss_drift_same_cam': losses_drift_same_cam.val,
+                        'train/loss_drift_cross_cam_uniform': losses_drift_cross_cam_uniform.val,
                         'train/loss_total': (
                             losses_ce.val
                             + losses_tri.val
@@ -389,6 +418,8 @@ class BAUTrainer(object):
                             + losses_xdom_contrast.val
                             + losses_drift_xcontrast.val
                             + losses_tri_dom.val
+                            + losses_drift_same_cam.val
+                            + losses_drift_cross_cam_uniform.val
                         ),
                         'train/precision': precisions.val / 100.0 if precisions.val > 1 else precisions.val,  # ensure fraction
                         'time/batch_sec': batch_time.val,
@@ -414,6 +445,8 @@ class BAUTrainer(object):
                       f' L_XDom: {losses_xdom_contrast.val:.3f} ({losses_xdom_contrast.avg:.3f})  '
                       f' L_TriDom: {losses_tri_dom.val:.3f} ({losses_tri_dom.avg:.3f})  '
                       f' L_DriftX: {losses_drift_xcontrast.val:.3f} ({losses_drift_xcontrast.avg:.3f})  '
+                      f' L_DriftSC: {losses_drift_same_cam.val:.3f} ({losses_drift_same_cam.avg:.3f})  '
+                      f' L_DriftCU: {losses_drift_cross_cam_uniform.val:.3f} ({losses_drift_cross_cam_uniform.avg:.3f})  '
                       f' L_Domain: {losses_domain.val:.3f} ({losses_domain.avg:.3f})  '
                       f' Prec: {precisions.val:.2%} ({precisions.avg:.2%})')
                 torch.cuda.empty_cache()
@@ -505,6 +538,32 @@ class BAUTrainer(object):
         diff = drift_w.unsqueeze(0) - drift_w.unsqueeze(1)
         dist_sq = diff.pow(2).sum(dim=-1)
         return dist_sq[mask].mean()
+
+    def drift_same_camera_attraction_loss(self, drift_w, cids):
+        """L2^2 on drift for same-camera pairs (any PID). Idea 1d."""
+        N = drift_w.size(0)
+        cam_eq = torch.eq(cids.unsqueeze(0), cids.unsqueeze(1))
+        diag_mask = torch.eye(N, dtype=torch.bool, device=drift_w.device)
+        mask = cam_eq & ~diag_mask
+        if mask.sum() == 0:
+            return torch.tensor(0.0, device=drift_w.device)
+        diff = drift_w.unsqueeze(0) - drift_w.unsqueeze(1)
+        dist_sq = diff.pow(2).sum(dim=-1)
+        return dist_sq[mask].mean()
+
+    def drift_cross_camera_uniformity_loss(self, drift_w, cids, t=2.0):
+        """Wang–Isola-style log-mean-exp Gaussian potential on raw drift for cross-camera pairs. Idea 1e."""
+        # Optional L2 normalize was removed (see changelog 2026-04-10): keep raw drift in Randers ball.
+        N = drift_w.size(0)
+        cam_neq = ~torch.eq(cids.unsqueeze(0), cids.unsqueeze(1))
+        triu = torch.triu(torch.ones(N, N, dtype=torch.bool, device=drift_w.device), diagonal=1)
+        mask = cam_neq & triu
+        if mask.sum() == 0:
+            return torch.tensor(0.0, device=drift_w.device)
+        diff = drift_w.unsqueeze(0) - drift_w.unsqueeze(1)
+        dist_sq = diff.pow(2).sum(dim=-1)
+        potentials = torch.exp(-t * dist_sq)
+        return potentials[mask].mean().log()
 
     def domain_loss(self, f, c, dids, alpha=None):
         m, n = f.size(0), c.size(0)

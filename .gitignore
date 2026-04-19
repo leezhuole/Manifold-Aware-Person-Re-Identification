@@ -342,3 +342,7 @@ archive/
 wandb/
 examples/data/
 old_logs/
+
+.cursor/
+results/
+.github/

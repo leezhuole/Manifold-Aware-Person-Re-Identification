@@ -46,7 +46,7 @@ SAMPLER="RandomMultipleGallery"
 
 IDX=${SLURM_ARRAY_TASK_ID:-0}
 case "${IDX}" in
-  0)
+  0) w
     SOURCE_DATASET="market1501 msmt17 cuhksysu"
     TARGET_DATASET=cuhk03
     PROTOCOL_TAG="m-ms-cs_dt-cuhk03"
