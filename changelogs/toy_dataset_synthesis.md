@@ -180,3 +180,51 @@ Preprint: [https://arxiv.org/abs/1903.12261](https://arxiv.org/abs/1903.12261)
 ## 11. Changelog pointer
 
 Repository-level changes to the generator are logged in [`changelog.md`](../changelog.md) at the project root.
+
+---
+
+## 12. v3.0 — two source crops per identity (schema diff)
+
+**Date bumped:** 2026-04-19. **Scope:** source-selection and filename layout only; the `CORRUPTION_TABLE` and ImageNet-C operator mapping are unchanged.
+
+### 12.1 Motivation
+
+The canonical ReID retrieval setup matches *a different photo of the same person*, not *the same photo under different perturbations*. Under v2.0 the gallery always contains the same underlying crop as the query, modulated by the corruption pipeline, so any retrieval metric conflates corruption-induced drift with trivially perfect identity content. v3.0 selects **two distinct source crops per PID from different Market-1501 cameras**, applies the full five-level severity ladder to each, and uses the `cmc` / `mean_ap` same-(pid, cam) filter to force each query to resolve via the *opposite* source.
+
+Full motivation, peer-level critical analysis, and all downstream diagnostics (Points 1a/1b/2/3) live in [`changelogs/toy_dataset_asymmetry_diagnostics.md`](toy_dataset_asymmetry_diagnostics.md).
+
+### 12.2 Filename convention (breaking change)
+
+| Field | v2.0 | v3.0 |
+|---|---|---|
+| `c{...}` | `cam_id = severity + 1` | `cam_id = source_idx ∈ {1, 2}` |
+| `s{...}` | `seq_id = 1` (fixed) | `seq_id = severity + 1 ∈ {1..5}` |
+
+Example: PID 1, source 1, severity 2 is `0001_c1s3_000001_01.jpg`.
+
+### 12.3 Split sizes
+
+| Split | v2.0 per PID | v3.0 per PID |
+|---|---|---|
+| `bounding_box_test/` | 5 | 10 |
+| `query/` | 1 (s=0) | 1 (source=1, s=0) |
+| `gallery/` | 4 (s=1..4) | 9 (everything else) |
+
+At `--num-identities 50` the total grows from 250 to 500 crops.
+
+### 12.4 Metadata additions (`metadata.json`)
+
+- `dataset.toy_dataset_version = "3.0"`, `dataset.schema_version = 3`.
+- `dataset.num_sources_per_pid` (int, default 2).
+- `dataset.source_crop_selection = "lex_sort_distinct_camera_topN"`.
+- `dataset.filename_convention = "{pid:04d}_c{source_idx}s{severity+1}_000001_01.jpg"`.
+- `dataset.diagnostics_doc = "changelogs/toy_dataset_asymmetry_diagnostics.md"`.
+- Per-image records gain `source_idx` alongside the existing `cam_id` / `seq_id` fields.
+
+### 12.5 Determinism
+
+The corruption RNG is now keyed by `(seed, original_pid, source_idx, severity)` via SHA-256 — same command line still produces byte-identical JPEGs for source 1, and adding more sources is backward-compatible.
+
+### 12.6 Downstream consumers
+
+Parsers should detect the version via `metadata.json`'s `dataset.toy_dataset_version`. [`scripts/toy_dataset_analysis.py`](../scripts/toy_dataset_analysis.py) gates on this and falls back to the v2.0 regex interpretation (cam = severity + 1) when version starts with `"2"`.

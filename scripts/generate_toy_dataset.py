@@ -44,7 +44,13 @@ except AttributeError:
     _RESAMPLE = Image.BILINEAR  # type: ignore[attr-defined]
 
 # Bump when corruption definitions or metadata schema change.
-TOY_DATASET_VERSION = "2.0"
+# v3.0 — two source crops per PID (distinct Market-1501 cameras) x 5 severities.
+#        filename: {pid:04d}_c{source}s{severity+1}_000001_01.jpg
+#        cam_id now encodes SOURCE INDEX, severity encoded via the seq field.
+TOY_DATASET_VERSION = "3.0"
+
+# Number of distinct source crops picked per identity (from distinct Market-1501 cameras).
+NUM_SOURCES_PER_PID = 2
 
 # Severity 0 = clean. Each row: ImageNet-C-style proxies (see module docstring).
 # Keys:
@@ -127,9 +133,13 @@ LITERATURE_ANCHOR = {
 }
 
 
-def _rng_for_image(seed: int, orig_pid: int, level: int) -> np.random.Generator:
-    """Deterministic RNG for noise so reruns match (same seed, pid, level)."""
-    h = hashlib.sha256(f"{seed}:{orig_pid}:{level}".encode()).digest()
+def _rng_for_image(seed: int, orig_pid: int, level: int,
+                   source_idx: int = 1) -> np.random.Generator:
+    """Deterministic RNG for noise so reruns match (same seed, pid, source_idx, level).
+
+    ``source_idx`` defaults to 1 for backward compatibility with v2.0 single-source runs.
+    """
+    h = hashlib.sha256(f"{seed}:{orig_pid}:{source_idx}:{level}".encode()).digest()
     s = int.from_bytes(h[:8], "little", signed=False)
     return np.random.default_rng(s)
 
@@ -182,13 +192,14 @@ def apply_corruption(
     *,
     orig_pid: int,
     seed: int,
+    source_idx: int = 1,
 ) -> Image.Image:
     """Apply composite corruption at the given severity level (0 = identity)."""
     if level == 0:
         return img.copy()
 
     params = CORRUPTION_TABLE[level]
-    rng = _rng_for_image(seed, orig_pid, level)
+    rng = _rng_for_image(seed, orig_pid, level, source_idx=source_idx)
     out = img.copy()
 
     # 1. Defocus blur (ImageNet-C: Defocus Blur)
@@ -239,10 +250,17 @@ def apply_corruption(
     return out
 
 
-def select_identities(source_dir: str, num_identities: int, seed: int):
-    """Select identities with at least 2 cameras and pick one image per identity."""
+def select_identities(source_dir: str, num_identities: int, seed: int,
+                      num_sources: int = NUM_SOURCES_PER_PID):
+    """Select identities with >=num_sources distinct cameras and pick one image per camera.
+
+    Returns a dict ``{pid: [fname_source_1, fname_source_2, ...]}`` of length ``num_sources``.
+    Source crops are drawn from DISTINCT Market-1501 cameras whenever available, so that the
+    two renderings of the same identity capture genuinely different appearance conditions
+    (pose, viewpoint, illumination) on top of the synthetic corruption ladder.
+    """
     pattern = re.compile(r"([-\d]+)_c(\d)")
-    pid_images = {}
+    pid_images = {}  # {pid: {cam: [fnames]}}
 
     for fname in sorted(os.listdir(source_dir)):
         m = pattern.search(fname)
@@ -251,19 +269,12 @@ def select_identities(source_dir: str, num_identities: int, seed: int):
         pid = int(m.group(1))
         if pid <= 0:
             continue
-        if pid not in pid_images:
-            pid_images[pid] = []
-        pid_images[pid].append(fname)
+        cam = int(m.group(2))
+        pid_images.setdefault(pid, {}).setdefault(cam, []).append(fname)
 
-    multi_cam_pids = {}
-    for pid, fnames in pid_images.items():
-        cams = set()
-        for f in fnames:
-            m = pattern.search(f)
-            if m is not None:
-                cams.add(int(m.group(2)))
-        if len(cams) >= 2:
-            multi_cam_pids[pid] = fnames
+    multi_cam_pids = {
+        pid: cam_dict for pid, cam_dict in pid_images.items() if len(cam_dict) >= num_sources
+    }
 
     rng = random.Random(seed)
     available = sorted(multi_cam_pids.keys())
@@ -272,21 +283,37 @@ def select_identities(source_dir: str, num_identities: int, seed: int):
 
     result = {}
     for pid in selected:
-        result[pid] = sorted(multi_cam_pids[pid])[0]
+        cam_dict = multi_cam_pids[pid]
+        # Pick the two (or num_sources) lexicographically-smallest cameras; from each
+        # camera pick the lex-smallest filename. Deterministic given the sorted source_dir.
+        chosen_cams = sorted(cam_dict.keys())[:num_sources]
+        result[pid] = [sorted(cam_dict[c])[0] for c in chosen_cams]
 
     return result
 
 
-def generate_dataset(source_dir: str, output_dir: str, num_identities: int, seed: int):
-    """Generate the full toy corruption dataset."""
-    selected = select_identities(source_dir, num_identities, seed)
-    print(f"Selected {len(selected)} identities from {source_dir}")
+def generate_dataset(source_dir: str, output_dir: str, num_identities: int, seed: int,
+                     num_sources: int = NUM_SOURCES_PER_PID):
+    """Generate the full toy corruption dataset (v3.0: num_sources crops per PID x 5 severities).
+
+    Filename convention: ``{new_pid:04d}_c{source_idx}s{severity+1}_000001_01.jpg``
+      - ``c{source_idx}`` (1..num_sources) becomes the ReID camera id for cmc/mean_ap filtering.
+      - ``s{severity+1}`` (1..5) encodes corruption severity via Market-1501's sequence field.
+
+    Splits:
+      - ``bounding_box_test/`` — all num_sources * 5 crops per PID.
+      - ``query/``    — source 1, severity 0 (one clean anchor per PID).
+      - ``gallery/``  — everything else.
+    """
+    selected = select_identities(source_dir, num_identities, seed, num_sources=num_sources)
+    print(f"Selected {len(selected)} identities from {source_dir} (num_sources={num_sources})")
 
     pid_map = {orig: new + 1 for new, orig in enumerate(sorted(selected.keys()))}
 
     dirs = {
         "all": osp.join(output_dir, "bounding_box_test"),
-        "query": osp.join(output_dir, "query"),
+        "query_s1": osp.join(output_dir, "query_s1"),
+        "query_s2": osp.join(output_dir, "query_s2"),
         "gallery": osp.join(output_dir, "gallery"),
     }
     for d in dirs.values():
@@ -295,44 +322,59 @@ def generate_dataset(source_dir: str, output_dir: str, num_identities: int, seed
     images_meta = {}
     num_levels = len(CORRUPTION_TABLE)
 
-    for orig_pid, fname in sorted(selected.items()):
+    for orig_pid, fnames in sorted(selected.items()):
         new_pid = pid_map[orig_pid]
-        src_path = osp.join(source_dir, fname)
-        img = Image.open(src_path).convert("RGB")
+        assert len(fnames) == num_sources, (
+            f"select_identities returned {len(fnames)} crops for pid {orig_pid}; expected {num_sources}"
+        )
 
-        for level in range(num_levels):
-            corrupted = apply_corruption(img, level, orig_pid=orig_pid, seed=seed)
+        for source_idx, fname in enumerate(fnames, start=1):
+            src_path = osp.join(source_dir, fname)
+            img = Image.open(src_path).convert("RGB")
 
-            cam_id = level + 1
-            out_name = f"{new_pid:04d}_c{cam_id}s1_000001_01.jpg"
+            for level in range(num_levels):
+                # Corruption RNG is keyed by (seed, orig_pid, source_idx, severity)
+                # so that adding more sources later is backward-compatible for source 1.
+                corrupted = apply_corruption(
+                    img, level, orig_pid=orig_pid, seed=seed, source_idx=source_idx
+                )
 
-            out_path = osp.join(dirs["all"], out_name)
-            corrupted.save(out_path, quality=95)
+                seq_id = level + 1  # 1..5 = severity 0..4 encoded in Market-1501 seq field
+                out_name = f"{new_pid:04d}_c{source_idx}s{seq_id}_000001_01.jpg"
 
-            if level == 0:
-                corrupted.save(osp.join(dirs["query"], out_name), quality=95)
-            else:
-                corrupted.save(osp.join(dirs["gallery"], out_name), quality=95)
+                out_path = osp.join(dirs["all"], out_name)
+                corrupted.save(out_path, quality=95)
 
-            images_meta[out_name] = {
-                "original_pid": orig_pid,
-                "new_pid": new_pid,
-                "severity": level,
-                "cam_id": cam_id,
-                "source_file": fname,
-            }
+                if level == 0 and source_idx in (1, 2):
+                    corrupted.save(osp.join(dirs[f"query_s{source_idx}"], out_name), quality=95)
+                else:
+                    corrupted.save(osp.join(dirs["gallery"], out_name), quality=95)
+
+                images_meta[out_name] = {
+                    "original_pid": orig_pid,
+                    "new_pid": new_pid,
+                    "source_idx": source_idx,
+                    "severity": level,
+                    "cam_id": source_idx,
+                    "seq_id": seq_id,
+                    "source_file": fname,
+                }
 
     dataset_info = {
         "toy_dataset_version": TOY_DATASET_VERSION,
-        "schema_version": 2,
+        "schema_version": 3,
         "source_dir": source_dir,
         "output_dir": output_dir,
         "num_identities": num_identities,
+        "num_sources_per_pid": num_sources,
+        "source_crop_selection": "lex_sort_distinct_camera_topN",
+        "filename_convention": "{pid:04d}_c{source_idx}s{severity+1}_000001_01.jpg",
         "seed": seed,
         "pipeline_order": PIPELINE_ORDER,
         "literature_anchor": LITERATURE_ANCHOR,
         "corruption_table": {str(k): v for k, v in CORRUPTION_TABLE.items()},
-        "synthesis_doc": "docs/toy_dataset_synthesis.md",
+        "synthesis_doc": "changelogs/toy_dataset_synthesis.md",
+        "diagnostics_doc": "changelogs/toy_dataset_asymmetry_diagnostics.md",
     }
 
     metadata = {"dataset": dataset_info, "images": images_meta}
@@ -341,12 +383,16 @@ def generate_dataset(source_dir: str, output_dir: str, num_identities: int, seed
     with open(meta_path, "w") as f:
         json.dump(metadata, f, indent=2)
 
-    total = len(selected) * num_levels
-    print(f"Generated {total} images ({len(selected)} identities x {num_levels} severity levels)")
-    print(f"  Query (clean):   {len(selected)} images in {dirs['query']}")
-    print(f"  Gallery (corr.): {len(selected) * (num_levels - 1)} images in {dirs['gallery']}")
-    print(f"  All:             {total} images in {dirs['all']}")
-    print(f"  Metadata:        {meta_path}")
+    total_per_pid = num_sources * num_levels
+    total = len(selected) * total_per_pid
+    n_query_per_source = len(selected)  # one clean image (severity 0) per PID per source
+    n_gallery = total - num_sources * n_query_per_source
+    print(f"Generated {total} images ({len(selected)} identities x {num_sources} sources x {num_levels} severities)")
+    print(f"  Query S1 (clean, s=0, source 1): {n_query_per_source} images in {dirs['query_s1']}")
+    print(f"  Query S2 (clean, s=0, source 2): {n_query_per_source} images in {dirs['query_s2']}")
+    print(f"  Gallery (rest):                  {n_gallery} images in {dirs['gallery']}")
+    print(f"  All:                             {total} images in {dirs['all']}")
+    print(f"  Metadata:                        {meta_path}")
 
     print("\nCorruption levels (toy_dataset_version=%s):" % TOY_DATASET_VERSION)
     for lvl, params in CORRUPTION_TABLE.items():
@@ -373,7 +419,10 @@ if __name__ == "__main__":
         help="Output directory for the toy dataset",
     )
     parser.add_argument("--num-identities", type=int, default=50)
+    parser.add_argument("--num-sources", type=int, default=NUM_SOURCES_PER_PID,
+                        help="Number of distinct source crops per PID (v3.0 default: 2)")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    generate_dataset(args.source_dir, args.output_dir, args.num_identities, args.seed)
+    generate_dataset(args.source_dir, args.output_dir, args.num_identities, args.seed,
+                     num_sources=args.num_sources)

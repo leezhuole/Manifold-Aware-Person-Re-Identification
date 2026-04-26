@@ -67,10 +67,22 @@ def _series_percent_mAP(eucl_raw: Mapping, fins_raw: Mapping) -> tuple[list[int]
 
 
 def make_corruption_strip(dataset_dir: str, output_path: str) -> None:
-    """One-row strip: five crops for PID 1 at severities 0..4; only ``$s=k$`` panel titles."""
+    """One-row strip: five crops for PID 1, source 1 at severities 0..4; only ``$s=k$`` titles.
+
+    v3.0 layout: ``0001_c1s{sev+1}_...jpg`` (cam=source_idx, seq=severity+1). Falls back
+    to the v2.0 layout ``0001_c{sev+1}s1_...jpg`` if the v3 filename is missing.
+    """
     bb_dir = osp.join(dataset_dir, "bounding_box_test")
     n_sev = 5
-    fnames = [f"0001_c{sev + 1}s1_000001_01.jpg" for sev in range(n_sev)]
+
+    def _pick(sev: int) -> str:
+        v3 = f"0001_c1s{sev + 1}_000001_01.jpg"
+        v2 = f"0001_c{sev + 1}s1_000001_01.jpg"
+        if osp.exists(osp.join(bb_dir, v3)):
+            return v3
+        return v2
+
+    fnames = [_pick(sev) for sev in range(n_sev)]
 
     fig, axes = plt.subplots(1, n_sev, figsize=(5.5, 1.80))
     fig.subplots_adjust(left=0.01, right=0.99, top=0.85, bottom=0.01, wspace=0.05)
@@ -208,6 +220,237 @@ def make_retrieval_mAP_plot(
     ax.tick_params(labelsize=FONT_TICK)
     ax.set_xticks(sevs)
     ax.legend(fontsize=FONT_LEGEND, loc="lower left", framealpha=0.92)
+
+    fig.tight_layout(pad=0.4)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", pad_inches=0.04)
+    plt.close(fig)
+
+
+def make_cross_severity_heatmap(
+    matrix,
+    output_path: str,
+    *,
+    severities=(0, 1, 2, 3, 4),
+    cbar_label: str = "mAP (%)",
+    cmap: str = "viridis",
+    value_scale: float = 100.0,
+    vmin=None,
+    vmax=None,
+    diverging: bool = False,
+) -> None:
+    """Render a 5x5 (sigma_q, sigma_g) heatmap. Diverging=True centres the colormap at 0."""
+    arr = np.array(matrix, dtype=np.float64) * value_scale
+    n = len(severities)
+
+    fig, ax = plt.subplots(figsize=(3.6, 3.2))
+    if diverging:
+        lim = np.nanmax(np.abs(arr)) if np.any(~np.isnan(arr)) else 1.0
+        lim = max(lim, 1e-6)
+        im = ax.imshow(arr, cmap="coolwarm", vmin=-lim, vmax=lim, aspect="equal")
+    else:
+        im = ax.imshow(arr, cmap=cmap, vmin=vmin, vmax=vmax, aspect="equal")
+
+    ax.set_xticks(range(n)); ax.set_yticks(range(n))
+    ax.set_xticklabels([str(s) for s in severities], fontsize=FONT_TICK)
+    ax.set_yticklabels([str(s) for s in severities], fontsize=FONT_TICK)
+    ax.set_xlabel(r"Gallery severity $\sigma_g$", fontsize=FONT_LABEL)
+    ax.set_ylabel(r"Query severity $\sigma_q$", fontsize=FONT_LABEL)
+
+    for i in range(n):
+        for j in range(n):
+            v = arr[i, j]
+            if np.isnan(v):
+                txt = "—"
+                color = "0.3"
+            else:
+                txt = f"{v:.1f}"
+                # Text color flips on dark backgrounds
+                if diverging:
+                    color = "black"
+                else:
+                    norm_v = (v - np.nanmin(arr)) / max(np.nanmax(arr) - np.nanmin(arr), 1e-9)
+                    color = "white" if norm_v < 0.45 else "black"
+            ax.text(j, i, txt, ha="center", va="center", fontsize=FONT_ANNOT, color=color)
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.ax.tick_params(labelsize=FONT_TICK)
+    cbar.set_label(cbar_label, fontsize=FONT_LABEL)
+    fig.tight_layout(pad=0.4)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", pad_inches=0.04)
+    plt.close(fig)
+
+
+def make_cosine_block_bar(
+    block_means: dict,
+    output_path: str,
+) -> None:
+    """Bar chart of the 8-way (pid x source x severity) block means of the drift cosine."""
+    order = []
+    for P in ("same_pid", "diff_pid"):
+        for S in ("same_src", "diff_src"):
+            for Sig in ("same_sev", "diff_sev"):
+                order.append(f"{P}__{S}__{Sig}")
+    means = [block_means.get(k, {}).get("mean", float("nan")) for k in order]
+    stds = [block_means.get(k, {}).get("std", float("nan")) for k in order]
+    labels = [
+        "pid=\npid=\nsev=",  # placeholder, overridden below
+    ]
+    short = []
+    for k in order:
+        p, s, sig = k.split("__")
+        short.append(
+            f"{'P' if p=='same_pid' else 'p'}/"
+            f"{'S' if s=='same_src' else 's'}/"
+            f"{'Σ' if sig=='same_sev' else 'σ'}"
+        )
+
+    fig, ax = plt.subplots(figsize=(4.8, 2.8))
+    xs = np.arange(len(order))
+    colors = [COLOR_FINS if k.startswith("same_pid") else COLOR_EUCL for k in order]
+    ax.bar(xs, means, yerr=stds, color=colors, alpha=0.85, capsize=3, edgecolor="black", linewidth=0.4)
+    ax.axhline(0.0, color="0.5", linewidth=0.6, linestyle="--")
+    ax.set_xticks(xs)
+    ax.set_xticklabels(short, fontsize=FONT_TICK, rotation=0)
+    ax.set_ylabel(r"Mean drift cosine $\bar{C}$", fontsize=FONT_LABEL)
+    ax.tick_params(labelsize=FONT_TICK)
+    ax.text(
+        0.02, 0.97,
+        r"Upper-case $=$ same; lower-case $=$ diff. " + "\n" + r"Axes: P(id), S(ource), $\Sigma$(ev).",
+        transform=ax.transAxes, fontsize=FONT_ANNOT, va="top", ha="left", color="0.3",
+    )
+    fig.tight_layout(pad=0.4)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", pad_inches=0.04)
+    plt.close(fig)
+
+
+def make_drift_absorption_plot(
+    per_severity: dict,
+    analytic_null_B: float,
+    analytic_null_C: float,
+    shuffle_null: dict,
+    output_path: str,
+) -> None:
+    """Plot eta_B and eta_C vs severity k, with analytic and shuffle nulls as reference bands."""
+    ks = sorted(int(k) for k in per_severity.keys() if per_severity.get(k, {}).get("n", 0) > 0)
+    if not ks:
+        return
+    etaB = [per_severity[k]["eta_B_mean"] for k in ks]
+    etaB_std = [per_severity[k].get("eta_B_std", 0.0) for k in ks]
+    etaC = [per_severity[k]["eta_C_mean"] for k in ks]
+    etaC_std = [per_severity[k].get("eta_C_std", 0.0) for k in ks]
+
+    fig, ax = plt.subplots(figsize=(FIGMAP_W, FIGMAP_H))
+    ax.errorbar(ks, etaB, yerr=etaB_std, color=COLOR_FINS, marker="o", linewidth=LINE_W,
+                markersize=MARKER_S, capsize=3, label=r"$\bar{\eta}_B$ (midpoint)")
+    ax.errorbar(ks, etaC, yerr=etaC_std, color=COLOR_EUCL, marker="s", linewidth=LINE_W,
+                markersize=MARKER_S, linestyle="--", capsize=3, label=r"$\bar{\eta}_C$ (2-D GS)")
+
+    # Analytic nulls as horizontal lines
+    ax.axhline(analytic_null_B, color=COLOR_FINS, linewidth=0.6, linestyle=":",
+               label=r"$m/d_{\mathrm{id}}$ isotropic null (B)")
+    ax.axhline(analytic_null_C, color=COLOR_EUCL, linewidth=0.6, linestyle=":",
+               label=r"$m/d_{\mathrm{id}}$ isotropic null (C)")
+
+    # Shuffle null bands (mean ± std) per severity
+    shuffle_xs, shuffle_B_mean, shuffle_B_std = [], [], []
+    shuffle_C_mean, shuffle_C_std = [], []
+    for k in ks:
+        d = shuffle_null.get(k) or shuffle_null.get(str(k)) or {}
+        if d.get("n_reps", 0) > 0:
+            shuffle_xs.append(k)
+            shuffle_B_mean.append(d.get("eta_B_null_mean", float("nan")))
+            shuffle_B_std.append(d.get("eta_B_null_std", 0.0))
+            shuffle_C_mean.append(d.get("eta_C_null_mean", float("nan")))
+            shuffle_C_std.append(d.get("eta_C_null_std", 0.0))
+    if shuffle_xs:
+        sb_m = np.array(shuffle_B_mean); sb_s = np.array(shuffle_B_std)
+        sc_m = np.array(shuffle_C_mean); sc_s = np.array(shuffle_C_std)
+        ax.fill_between(shuffle_xs, sb_m - sb_s, sb_m + sb_s, color=COLOR_FINS, alpha=0.12,
+                        label="shuffle null (B)")
+        ax.fill_between(shuffle_xs, sc_m - sc_s, sc_m + sc_s, color=COLOR_EUCL, alpha=0.12,
+                        label="shuffle null (C)")
+
+    ax.set_yscale("log")
+    ax.set_xlabel(r"Severity $k$", fontsize=FONT_LABEL)
+    ax.set_ylabel(r"Absorption $\bar{\eta}$", fontsize=FONT_LABEL)
+    ax.set_xticks(ks)
+    ax.tick_params(labelsize=FONT_TICK)
+    ax.legend(fontsize=FONT_ANNOT, loc="best", framealpha=0.9, ncol=2)
+    fig.tight_layout(pad=0.4)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", pad_inches=0.04)
+    plt.close(fig)
+
+
+def make_drift_alignment_plot(
+    per_severity: dict,
+    shuffle_null: dict,
+    output_path: str,
+) -> None:
+    """Two-row panel: (top) mean drift-alignment cosine $\\bar{c}_k = \\overline{\\cos(\\omega_0, \\omega_k)}$
+    as the validity gauge; (bottom) $\\bar{\\eta}_{\\mathrm{ref}}$ and $\\bar{\\eta}_B$ on log-scale
+    with shuffle-null bands. See changelogs/toy_dataset_reference_projector_supplement.md.
+    """
+    ks = sorted(int(k) for k in per_severity.keys() if per_severity.get(k, {}).get("n", 0) > 0)
+    if not ks:
+        return
+
+    def _get(k, key, default=float("nan")):
+        row = per_severity.get(k) or per_severity.get(str(k)) or {}
+        v = row.get(key, default)
+        return float(v) if v is not None else default
+
+    cos_mean = [_get(k, "cos_omega_0_k_mean") for k in ks]
+    cos_std = [_get(k, "cos_omega_0_k_std", 0.0) for k in ks]
+    eta_ref = [_get(k, "eta_ref_mean") for k in ks]
+    eta_ref_std = [_get(k, "eta_ref_std", 0.0) for k in ks]
+    eta_B = [_get(k, "eta_B_mean") for k in ks]
+    eta_B_std = [_get(k, "eta_B_std", 0.0) for k in ks]
+
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2, 1, sharex=True, figsize=(FIGMAP_W, FIGMAP_H * 1.55),
+        gridspec_kw={"height_ratios": [1.0, 1.25]},
+    )
+
+    ax_top.errorbar(ks, cos_mean, yerr=cos_std, color=COLOR_FINS, marker="o",
+                    linewidth=LINE_W, markersize=MARKER_S, capsize=3,
+                    label=r"$\bar{c}_k = \overline{\cos(\omega_0,\omega_k)}$")
+    ax_top.axhline(1.0, color="0.6", linewidth=0.5, linestyle=":")
+    ax_top.axhline(0.0, color="0.6", linewidth=0.5, linestyle=":")
+    ax_top.set_ylabel(r"$\bar{c}_k$", fontsize=FONT_LABEL)
+    ax_top.tick_params(labelsize=FONT_TICK)
+    ax_top.set_ylim(-0.05, 1.05)
+    ax_top.legend(fontsize=FONT_ANNOT, loc="lower left", framealpha=0.9)
+
+    ax_bot.errorbar(ks, eta_ref, yerr=eta_ref_std, color=COLOR_FINS, marker="o",
+                    linewidth=LINE_W, markersize=MARKER_S, capsize=3,
+                    label=r"$\bar{\eta}_{\mathrm{ref}}$ (reference-point)")
+    ax_bot.errorbar(ks, eta_B, yerr=eta_B_std, color=COLOR_EUCL, marker="s",
+                    linewidth=LINE_W, markersize=MARKER_S, capsize=3, linestyle="--",
+                    label=r"$\bar{\eta}_B$ (midpoint)")
+
+    sh_xs, sh_refm, sh_refs, sh_Bm, sh_Bs = [], [], [], [], []
+    for k in ks:
+        d = shuffle_null.get(k) or shuffle_null.get(str(k)) or {}
+        if d.get("n_reps", 0) > 0:
+            sh_xs.append(k)
+            sh_refm.append(d.get("eta_ref_null_mean", float("nan")))
+            sh_refs.append(d.get("eta_ref_null_std", 0.0))
+            sh_Bm.append(d.get("eta_B_null_mean", float("nan")))
+            sh_Bs.append(d.get("eta_B_null_std", 0.0))
+    if sh_xs:
+        m = np.array(sh_refm); s = np.array(sh_refs)
+        ax_bot.fill_between(sh_xs, np.clip(m - s, 1e-9, None), m + s, color=COLOR_FINS,
+                            alpha=0.12, label="shuffle null (ref)")
+        m = np.array(sh_Bm); s = np.array(sh_Bs)
+        ax_bot.fill_between(sh_xs, np.clip(m - s, 1e-9, None), m + s, color=COLOR_EUCL,
+                            alpha=0.12, label="shuffle null (B)")
+
+    ax_bot.set_yscale("log")
+    ax_bot.set_xlabel(r"Severity $k$", fontsize=FONT_LABEL)
+    ax_bot.set_ylabel(r"Absorption $\bar{\eta}$", fontsize=FONT_LABEL)
+    ax_bot.set_xticks(ks)
+    ax_bot.tick_params(labelsize=FONT_TICK)
+    ax_bot.legend(fontsize=FONT_ANNOT, loc="best", framealpha=0.9, ncol=2)
 
     fig.tight_layout(pad=0.4)
     fig.savefig(output_path, dpi=300, bbox_inches="tight", pad_inches=0.04)

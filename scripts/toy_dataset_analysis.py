@@ -11,12 +11,12 @@ Retrieval mAP compares *two independently trained checkpoints*: embeddings from
 embeddings from ``--finsler-checkpoint`` (``resnet50_finsler``) ranked with
 ``finsler_drift_dist`` on the full [identity|drift] vector.
 
-Usage:
+Usage (v3.0 dataset — two source crops, asymmetry diagnostics enabled automatically):
     python scripts/toy_dataset_analysis.py \
         --finsler-checkpoint /home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/logs/finsler_primary/job_1521403_primary_unified_1c_w0.1_driftInst/best.pth \
         --euclidean-checkpoint logs/AGReIDv2_sweep/job_1502418_dt_cuhk03_EucBaseline/best.pth \
         --dataset-dir /home/stud/leez/reid/src/Manifold-Aware-Person-Re-Identification/examples/data/ToyCorruption \
-        --output-dir results/toy_analysis \
+        --output-dir results/toy_analysis_v3 \
         --viz-tsne
 
 Low-dimensional drift plots (optional):
@@ -24,7 +24,18 @@ Low-dimensional drift plots (optional):
     --fig-omega-identity-pca fig_omega_identity_pca.pdf \\
     --viz-tsne --fig-omega-tsne fig_omega_tsne.pdf
 
-Toy ``camera'' IDs follow ``scripts/generate_toy_dataset.py``: cam_id = severity + 1 (corruption level).
+v3.0 asymmetry diagnostic options (all optional; defaults shown):
+    --omega-cos-transport ambient   # or "parallel" (Pennec 2006 sphere transport)
+    --projection-report B_primary   # or "all" (includes P_A and P_C in JSON)
+    --projection-shuffle-reps 200   # permutation null iterations
+    --skip-v3-diagnostics           # revert to v2.0-only output on v3 data
+
+v3.0 filename convention (`scripts/generate_toy_dataset.py`): ``{pid:04d}_c{source_idx}s{sev+1}_...jpg``.
+Under v3.0, cam_id encodes the **source crop index** (1 or 2); severity is in the Market-1501 seq field.
+v2.0 fallback (cam_id = severity + 1) is auto-detected via the metadata.json `toy_dataset_version`.
+
+Asymmetry diagnostics (Points 1a/1b/2/3) spelled out in
+`changelogs/toy_dataset_asymmetry_diagnostics.md` and invoked from `main()` when v3.0 data is present.
 """
 
 import argparse
@@ -58,7 +69,15 @@ from bau.models.model import resnet50_finsler, resnet50
 from bau.loss.triplet import finsler_drift_dist, euclidean_dist
 from bau.evaluation_metrics import cmc, mean_ap
 
-from toy_paper_figures import copy_paper_outputs, make_corruption_strip, make_retrieval_mAP_plot
+from toy_paper_figures import (
+    copy_paper_outputs,
+    make_corruption_strip,
+    make_cosine_block_bar,
+    make_cross_severity_heatmap,
+    make_drift_absorption_plot,
+    make_drift_alignment_plot,
+    make_retrieval_mAP_plot,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -66,32 +85,61 @@ from toy_paper_figures import copy_paper_outputs, make_corruption_strip, make_re
 # ---------------------------------------------------------------------------
 
 class ToyDataset(torch.utils.data.Dataset):
-    """Minimal dataset that returns (img_tensor, fname, pid, camid)."""
+    """Minimal dataset that returns (img_tensor, fname, pid, source_idx, severity).
 
-    def __init__(self, image_dir, transform=None):
+    Supports v3.0 filename convention ``{pid}_c{source_idx}s{sev+1}_...jpg``
+    (two-field parse: cam encodes source, seq encodes severity+1). Falls back to the
+    v2.0 layout ``{pid}_c{cam_id}s1_...jpg`` (cam encodes severity+1, seq fixed at 1)
+    for backward-compatible runs on unregenerated datasets.
+    """
+
+    _PATTERN_V3 = re.compile(r"(\d+)_c(\d+)s(\d+)")
+
+    def __init__(self, image_dir, transform=None, dataset_version="3.0"):
         self.image_dir = image_dir
         self.transform = transform
-        pattern = re.compile(r"(\d+)_c(\d)")
+        self.dataset_version = str(dataset_version)
+        v3 = self.dataset_version.startswith("3")
         self.samples = []
         for fname in sorted(os.listdir(image_dir)):
             if not fname.endswith(".jpg"):
                 continue
-            m = pattern.search(fname)
+            m = self._PATTERN_V3.search(fname)
             if not m:
                 continue
             pid = int(m.group(1))
-            camid = int(m.group(2))
-            self.samples.append((fname, pid, camid))
+            first = int(m.group(2))
+            second = int(m.group(3))
+            if v3:
+                source_idx = first
+                severity = second - 1  # seq field encodes severity+1
+            else:
+                source_idx = 1
+                severity = first - 1  # legacy: cam field encoded severity+1
+            self.samples.append((fname, pid, source_idx, severity))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        fname, pid, camid = self.samples[idx]
+        fname, pid, source_idx, severity = self.samples[idx]
         img = Image.open(osp.join(self.image_dir, fname)).convert("RGB")
         if self.transform is not None:
             img = self.transform(img)
-        return img, fname, pid, camid
+        return img, fname, pid, source_idx, severity
+
+
+def _detect_dataset_version(dataset_dir: str) -> str:
+    """Read toy_dataset_version from metadata.json if present; default to 3.0."""
+    meta_path = osp.join(dataset_dir, "metadata.json")
+    if osp.isfile(meta_path):
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+            return str(meta.get("dataset", {}).get("toy_dataset_version", "3.0"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return "3.0"
 
 
 def get_test_transform(height=256, width=128):
@@ -158,20 +206,33 @@ def load_bau_euclidean_resnet50(checkpoint_path, num_classes=13726, in_stages=(1
 # ---------------------------------------------------------------------------
 
 def extract_features(model, data_loader):
-    """Extract features and metadata from a data loader."""
+    """Extract features and metadata from a data loader.
+
+    ``meta[fname]`` keys:
+      - ``pid`` (int), ``severity`` (int, 0..4), ``source_idx`` (int, 1..num_sources)
+      - ``camid`` is set to ``source_idx`` so that downstream mAP / CMC filtering
+        uses source-crop identity as the camera, matching the v3.0 filename contract.
+    """
     model.eval()
     features = OrderedDict()
-    meta = OrderedDict()  # fname -> (pid, camid, severity)
+    meta = OrderedDict()
 
     with torch.no_grad():
-        for imgs, fnames, pids, camids in data_loader:
+        for batch in data_loader:
+            imgs, fnames, pids, source_idxs, severities = batch
             imgs = imgs.cuda()
             outputs = model(imgs)
             outputs = outputs.data.cpu()
-            for fname, output, pid, camid in zip(fnames, outputs, pids, camids):
+            for fname, output, pid, source_idx, severity in zip(
+                fnames, outputs, pids, source_idxs, severities
+            ):
                 features[fname] = output
-                severity = int(camid) - 1  # camid 1-5 -> severity 0-4
-                meta[fname] = {"pid": int(pid), "camid": int(camid), "severity": severity}
+                meta[fname] = {
+                    "pid": int(pid),
+                    "source_idx": int(source_idx),
+                    "camid": int(source_idx),
+                    "severity": int(severity),
+                }
 
     return features, meta
 
@@ -242,6 +303,11 @@ def compute_retrieval_metrics(
     baseline_euclidean_resnet50=False,
 ):
     """Compute mAP and Rank-1 for query (severity 0) vs gallery (each severity 1-4).
+
+    Retained for backward compatibility with the v2.0 reporting. Under v3.0 the
+    ``meta[fname]["camid"]`` equals the source index, so cmc/mean_ap's same-(pid, cam)
+    filter automatically restricts each query to its *cross-source* gallery — this
+    function therefore reports the ``sigma_q=0`` row of the Point 1a cross-source matrix.
 
     If ``baseline_euclidean_resnet50`` is True, ``features`` are 2048-d ``resnet50`` BAU
     embeddings; ranking uses Euclidean distance on the full vector. Otherwise features
@@ -346,6 +412,8 @@ def compute_retrieval_topk(
                 "fname": gf,
                 "pid": int(gpid),
                 "camid": int(gcam),
+                "severity": int(meta[gf]["severity"]),
+                "source_idx": int(meta[gf].get("source_idx", 1)),
                 "dist": float(dists[j]),
                 "correct": int(gpid) == int(qpid),
             })
@@ -359,14 +427,19 @@ def compute_retrieval_topk(
 # ---------------------------------------------------------------------------
 
 def subsample_pids_with_full_severity(meta, num_identities, seed):
-    """Choose PIDs that have all severity levels 0..4 (toy: cam_id = severity + 1)."""
-    pid_sev = defaultdict(set)
+    """Choose PIDs with full severity coverage for at least source_idx=1.
+
+    Under v3.0 the dataset has 2 sources per PID; for visual PCA panels we only require
+    source 1 to cover severities 0..4 (source 2 is optional). This keeps the legacy
+    PCA figure unchanged while tolerating any single-source dropouts.
+    """
+    pid_src_sev = defaultdict(lambda: defaultdict(set))
     for m in meta.values():
-        pid_sev[m["pid"]].add(int(m["severity"]))
+        pid_src_sev[m["pid"]][m.get("source_idx", 1)].add(int(m["severity"]))
     eligible = []
     need = {0, 1, 2, 3, 4}
-    for pid in sorted(pid_sev.keys()):
-        if need.issubset(pid_sev[pid]):
+    for pid in sorted(pid_src_sev.keys()):
+        if need.issubset(pid_src_sev[pid].get(1, set())):
             eligible.append(pid)
     if not eligible:
         return []
@@ -376,18 +449,25 @@ def subsample_pids_with_full_severity(meta, num_identities, seed):
     return sorted(chosen)
 
 
-def gather_identity_drift_arrays(features, meta, pids, identity_dim=2048):
-    """Stack identity and drift slices for selected PIDs × severities 0..4 (row order: pid, then s)."""
+def gather_identity_drift_arrays(features, meta, pids, identity_dim=2048, source_idx=1):
+    """Stack identity and drift slices for selected PIDs × severities 0..4.
+
+    ``source_idx`` restricts to one source (default 1) so that the PCA panel still
+    shows single-source severity trajectories (5 points per PID). Under v2.0 data the
+    default ``source_idx=1`` matches the implicit single-source contract.
+    """
     pid_feats = defaultdict(dict)
     for fname, feat in features.items():
         m = meta[fname]
+        if int(m.get("source_idx", 1)) != int(source_idx):
+            continue
         pid_feats[m["pid"]][m["severity"]] = feat
 
     z_id_list, omega_list, sev_list, pid_list = [], [], [], []
     for pid in pids:
         for s in range(5):
             if s not in pid_feats[pid]:
-                raise KeyError(f"Missing severity {s} for pid {pid}")
+                raise KeyError(f"Missing severity {s} for pid {pid} (source {source_idx})")
             feat = pid_feats[pid][s]
             z_id_list.append(feat[:identity_dim].cpu().numpy())
             omega_list.append(feat[identity_dim:].cpu().numpy())
@@ -400,6 +480,624 @@ def gather_identity_drift_arrays(features, meta, pids, identity_dim=2048):
         np.array(sev_list, dtype=np.int64),
         np.array(pid_list, dtype=np.int64),
     )
+
+
+# ---------------------------------------------------------------------------
+# Asymmetry diagnostics (Points 1a / 1b / 2 / 3) — see
+# changelogs/toy_dataset_asymmetry_diagnostics.md for the mathematical contract.
+# ---------------------------------------------------------------------------
+
+_SEVERITIES = (0, 1, 2, 3, 4)
+
+
+def _group_by_pid_source_severity(features, meta):
+    """Return nested dict ``{pid: {source_idx: {severity: (fname, feat)}}}``."""
+    out: dict = defaultdict(lambda: defaultdict(dict))
+    for fname, feat in features.items():
+        m = meta[fname]
+        out[m["pid"]][int(m.get("source_idx", 1))][int(m["severity"])] = (fname, feat)
+    return out
+
+
+def _score_distances(
+    q_feats: torch.Tensor,
+    g_feats: torch.Tensor,
+    *,
+    identity_dim: int,
+    scoring: str,
+    dist_func=None,
+) -> np.ndarray:
+    """Score a block of queries vs gallery under one of three modes.
+
+    ``scoring='dE_full'``      — Euclidean distance on L2-normalised full vectors
+                                 (Euclidean BAU resnet50 baseline, 2048-d features).
+    ``scoring='dE_identity'``  — Euclidean distance on L2-normalised identity slice
+                                 of Finsler checkpoint features (direction-only control).
+    ``scoring='dF_midpoint'``  — Randers midpoint-drift distance (paper eq. 4) on
+                                 full 4096-d Finsler features via ``dist_func``.
+    """
+    if scoring == "dE_full":
+        q = F.normalize(q_feats, dim=1)
+        g = F.normalize(g_feats, dim=1)
+        return euclidean_dist(q, g).cpu().numpy()
+    if scoring == "dE_identity":
+        q = F.normalize(q_feats[:, :identity_dim], dim=1)
+        g = F.normalize(g_feats[:, :identity_dim], dim=1)
+        return euclidean_dist(q, g).cpu().numpy()
+    if scoring == "dF_midpoint":
+        if dist_func is None:
+            raise ValueError("scoring='dF_midpoint' requires dist_func (finsler_drift_dist partial)")
+        return dist_func(q_feats, g_feats, alpha=None).cpu().numpy()
+    raise ValueError(f"Unknown scoring: {scoring}")
+
+
+def _cross_source_cell(
+    features,
+    meta,
+    *,
+    identity_dim: int,
+    scoring: str,
+    dist_func,
+    s_q: int,
+    sigma_q: int,
+    s_g: int,
+    sigma_g: int,
+) -> dict:
+    """Compute mAP / Rank-1 on queries (s_q, sigma_q) vs gallery (s_g, sigma_g).
+
+    Uses ``camid`` = source_idx so that the cmc/mean_ap same-(pid,cam) filter does NOT
+    drop true matches when ``s_q != s_g`` and DOES drop them when ``s_q == s_g``
+    (standard ReID cross-camera evaluation).
+    """
+    q_items, g_items = [], []
+    for fname, feat in features.items():
+        m = meta[fname]
+        src = int(m.get("source_idx", 1))
+        sev = int(m["severity"])
+        if src == s_q and sev == sigma_q:
+            q_items.append((fname, m["pid"], src))
+        if src == s_g and sev == sigma_g:
+            g_items.append((fname, m["pid"], src))
+    if not q_items or not g_items:
+        return {"mAP": float("nan"), "Rank1": float("nan"), "n_queries": 0, "n_gallery": 0}
+
+    q_feats = torch.stack([features[f] for f, _, _ in q_items])
+    g_feats = torch.stack([features[f] for f, _, _ in g_items])
+    distmat = _score_distances(
+        q_feats, g_feats, identity_dim=identity_dim, scoring=scoring, dist_func=dist_func
+    )
+
+    q_pids = np.array([pid for _, pid, _ in q_items])
+    g_pids = np.array([pid for _, pid, _ in g_items])
+    q_cams = np.array([c for _, _, c in q_items])
+    g_cams = np.array([c for _, _, c in g_items])
+
+    mAP = mean_ap(distmat, q_pids, g_pids, q_cams, g_cams)
+    cmc_scores = cmc(
+        distmat, q_pids, g_pids, q_cams, g_cams,
+        separate_camera_set=False, single_gallery_shot=False, first_match_break=True,
+    )
+    return {
+        "mAP": float(mAP),
+        "Rank1": float(cmc_scores[0] if len(cmc_scores) > 0 else 0.0),
+        "n_queries": int(len(q_items)),
+        "n_gallery": int(len(g_items)),
+    }
+
+
+def compute_cross_source_severity_retrieval(
+    features,
+    meta,
+    *,
+    identity_dim: int,
+    scoring: str,
+    dist_func=None,
+    sources=(1, 2),
+):
+    """Point 1a: cross-source, cross-severity retrieval (5x5 per direction).
+
+    Returns a dict::
+        {
+          "mAP":  {(s_q, s_g): 5x5 list of lists (row sigma_q, col sigma_g)},
+          "Rank1":{(s_q, s_g): 5x5 list of lists},
+          "mAP_mean":  5x5 averaged over both source directions,
+          "Rank1_mean":5x5 averaged over both source directions,
+          "asymmetry_A": mAP_mean[sigma_q, sigma_g] - mAP_mean[sigma_g, sigma_q],
+          "scoring": scoring,
+        }
+
+    The asymmetry matrix A is the H1b signature of the Randers midpoint-drift term:
+    A ≡ 0 for symmetric metrics (d_E) up to sampling noise, non-trivial for d_F.
+    """
+    pair_directions = [(a, b) for a in sources for b in sources if a != b]
+    map_by_dir: dict = {}
+    rank_by_dir: dict = {}
+    nq_by_dir: dict = {}
+
+    for (s_q, s_g) in pair_directions:
+        mAP_mat = np.full((len(_SEVERITIES), len(_SEVERITIES)), np.nan, dtype=np.float64)
+        R1_mat = np.full_like(mAP_mat, np.nan)
+        nq_mat = np.zeros_like(mAP_mat, dtype=np.int64)
+        for i, sigma_q in enumerate(_SEVERITIES):
+            for j, sigma_g in enumerate(_SEVERITIES):
+                cell = _cross_source_cell(
+                    features, meta,
+                    identity_dim=identity_dim, scoring=scoring, dist_func=dist_func,
+                    s_q=s_q, sigma_q=sigma_q, s_g=s_g, sigma_g=sigma_g,
+                )
+                mAP_mat[i, j] = cell["mAP"]
+                R1_mat[i, j] = cell["Rank1"]
+                nq_mat[i, j] = cell["n_queries"]
+        map_by_dir[(s_q, s_g)] = mAP_mat
+        rank_by_dir[(s_q, s_g)] = R1_mat
+        nq_by_dir[(s_q, s_g)] = nq_mat
+
+    mAP_stack = np.stack(list(map_by_dir.values()), axis=0)
+    R1_stack = np.stack(list(rank_by_dir.values()), axis=0)
+    mAP_mean = np.nanmean(mAP_stack, axis=0)
+    R1_mean = np.nanmean(R1_stack, axis=0)
+    A = mAP_mean - mAP_mean.T
+
+    return {
+        "severities": list(_SEVERITIES),
+        "sources": list(sources),
+        "scoring": scoring,
+        "mAP_per_direction": {f"{a}->{b}": map_by_dir[(a, b)].tolist() for (a, b) in pair_directions},
+        "Rank1_per_direction": {f"{a}->{b}": rank_by_dir[(a, b)].tolist() for (a, b) in pair_directions},
+        "n_queries_per_direction": {f"{a}->{b}": nq_by_dir[(a, b)].tolist() for (a, b) in pair_directions},
+        "mAP_mean": mAP_mean.tolist(),
+        "Rank1_mean": R1_mean.tolist(),
+        "asymmetry_A": A.tolist(),
+        "asymmetry_max_abs": float(np.nanmax(np.abs(A))),
+    }
+
+
+def compute_same_source_severity_retrieval(
+    features,
+    meta,
+    *,
+    identity_dim: int,
+    scoring: str,
+    dist_func=None,
+    sources=(1, 2),
+):
+    """Point 1b (ablation): same-source, cross-severity retrieval.
+
+    Queries (s=s, sigma_q) and gallery (s=s, sigma_g) share source index; the mean_ap
+    same-(pid, cam) filter then forces the ranker to find the PID via the OPPOSITE
+    source — which isn't in the gallery, so every correct match is removed. To avoid
+    that degenerate case we build the gallery as the union over BOTH sources at sigma_g
+    but tag the query's source as a distinct cam so the same-source copy still gets
+    filtered, matching the mathematical contract in §3.1 of the design doc.
+    """
+    mAP_mat = np.full((len(_SEVERITIES), len(_SEVERITIES)), np.nan, dtype=np.float64)
+    R1_mat = np.full_like(mAP_mat, np.nan)
+    for i, sigma_q in enumerate(_SEVERITIES):
+        for j, sigma_g in enumerate(_SEVERITIES):
+            if sigma_q == sigma_g:
+                # Diagonal is degenerate: query equals one gallery entry (same source)
+                # and the same-cam filter removes it; skipping keeps the figure honest.
+                continue
+            q_items, g_items = [], []
+            for fname, feat in features.items():
+                m = meta[fname]
+                src = int(m.get("source_idx", 1))
+                sev = int(m["severity"])
+                if sev == sigma_q:
+                    q_items.append((fname, m["pid"], src))
+                if sev == sigma_g:
+                    g_items.append((fname, m["pid"], src))
+            if not q_items or not g_items:
+                continue
+            q_feats = torch.stack([features[f] for f, _, _ in q_items])
+            g_feats = torch.stack([features[f] for f, _, _ in g_items])
+            distmat = _score_distances(
+                q_feats, g_feats, identity_dim=identity_dim, scoring=scoring, dist_func=dist_func
+            )
+            q_pids = np.array([pid for _, pid, _ in q_items])
+            g_pids = np.array([pid for _, pid, _ in g_items])
+            q_cams = np.array([c for _, _, c in q_items])
+            g_cams = np.array([c for _, _, c in g_items])
+            mAP_mat[i, j] = mean_ap(distmat, q_pids, g_pids, q_cams, g_cams)
+            cmc_scores = cmc(
+                distmat, q_pids, g_pids, q_cams, g_cams,
+                separate_camera_set=False, single_gallery_shot=False, first_match_break=True,
+            )
+            R1_mat[i, j] = float(cmc_scores[0] if len(cmc_scores) > 0 else 0.0)
+
+    A = np.where(np.isnan(mAP_mat) | np.isnan(mAP_mat.T), np.nan, mAP_mat - mAP_mat.T)
+
+    return {
+        "severities": list(_SEVERITIES),
+        "scoring": scoring,
+        "mAP": mAP_mat.tolist(),
+        "Rank1": R1_mat.tolist(),
+        "asymmetry_A": A.tolist(),
+        "asymmetry_max_abs": float(np.nanmax(np.abs(A))) if np.any(~np.isnan(A)) else float("nan"),
+        "note": "Diagonal sigma_q=sigma_g skipped (same-source same-severity collapses).",
+    }
+
+
+def _parallel_transport_omega(
+    omega_j: np.ndarray, n_j: np.ndarray, n_i: np.ndarray, eps: float = 1e-6
+) -> np.ndarray:
+    """Parallel transport of omega_j from tangent space at n_j to tangent space at n_i.
+
+    Closed-form on the unit sphere (Pennec 2006, §3). Both n_i, n_j must be unit-norm.
+    Returns the transported vector; falls back to omega_j if n_i, n_j are antipodal.
+    """
+    dot = float(np.dot(n_i, n_j))
+    if dot <= -1.0 + eps:
+        return omega_j.copy()
+    coeff = float(np.dot(n_j, omega_j)) / (1.0 + dot)
+    return omega_j - coeff * (n_i + n_j)
+
+
+def compute_drift_cosine_matrix(
+    features,
+    meta,
+    *,
+    identity_dim: int,
+    transport: str = "ambient",
+    max_entries: int = 250000,
+):
+    """Point 2: all-pairs cosine-similarity matrix on drift vectors.
+
+    ``transport='ambient'`` — cosine in R^{d_id} (free-vector similarity, primary).
+    ``transport='parallel'`` — parallel-transport omega_j to the tangent at z^id_i on
+    the unit sphere via the closed-form Pennec (2006) formula, then cosine. Because
+    parallel transport is an isometry, ||P omega_j|| = ||omega_j||.
+
+    Reports the full N x N matrix (JSON-truncated if >max_entries) plus 8-way block
+    means over (same/diff pid) x (same/diff source) x (same/diff severity).
+    """
+    keys = sorted(features.keys())
+    N = len(keys)
+    omega = np.stack(
+        [features[k][identity_dim:].cpu().numpy().astype(np.float64) for k in keys], axis=0
+    )
+    z_id_raw = np.stack(
+        [features[k][:identity_dim].cpu().numpy().astype(np.float64) for k in keys], axis=0
+    )
+    z_id_unit = z_id_raw / np.maximum(np.linalg.norm(z_id_raw, axis=1, keepdims=True), 1e-12)
+    om_norm = np.linalg.norm(omega, axis=1)
+    om_safe = np.maximum(om_norm, 1e-12)
+
+    if transport == "ambient":
+        omega_unit = omega / om_safe[:, None]
+        C = omega_unit @ omega_unit.T
+    elif transport == "parallel":
+        C = np.zeros((N, N), dtype=np.float64)
+        for i in range(N):
+            om_i_norm = om_safe[i]
+            for j in range(N):
+                if i == j:
+                    C[i, j] = 1.0
+                    continue
+                transported = _parallel_transport_omega(omega[j], z_id_unit[j], z_id_unit[i])
+                C[i, j] = float(omega[i] @ transported) / (om_i_norm * om_safe[j])
+    else:
+        raise ValueError(f"Unknown transport: {transport}")
+
+    pids = np.array([meta[k]["pid"] for k in keys])
+    srcs = np.array([int(meta[k].get("source_idx", 1)) for k in keys])
+    sevs = np.array([int(meta[k]["severity"]) for k in keys])
+
+    same_pid = pids[:, None] == pids[None, :]
+    same_src = srcs[:, None] == srcs[None, :]
+    same_sev = sevs[:, None] == sevs[None, :]
+    triu = np.triu(np.ones_like(same_pid, dtype=bool), k=1)
+
+    blocks = {}
+    for P_label, P_mask in [("same_pid", same_pid), ("diff_pid", ~same_pid)]:
+        for S_label, S_mask in [("same_src", same_src), ("diff_src", ~same_src)]:
+            for Sig_label, Sig_mask in [("same_sev", same_sev), ("diff_sev", ~same_sev)]:
+                mask = P_mask & S_mask & Sig_mask & triu
+                n = int(mask.sum())
+                if n == 0:
+                    blocks[f"{P_label}__{S_label}__{Sig_label}"] = {
+                        "n_pairs": 0, "mean": float("nan"), "std": float("nan"),
+                    }
+                else:
+                    vals = C[mask]
+                    blocks[f"{P_label}__{S_label}__{Sig_label}"] = {
+                        "n_pairs": n,
+                        "mean": float(vals.mean()),
+                        "std": float(vals.std()),
+                    }
+
+    out: dict = {
+        "transport": transport,
+        "n_samples": N,
+        "keys": keys,
+        "pids": pids.tolist(),
+        "source_idx": srcs.tolist(),
+        "severity": sevs.tolist(),
+        "block_means": blocks,
+    }
+    if N * N <= max_entries:
+        out["C_full"] = C.tolist()
+    else:
+        out["C_full"] = None
+        out["C_full_dropped_reason"] = f"N*N={N*N} exceeds max_entries={max_entries}"
+    return out, C, keys, pids, srcs, sevs
+
+
+def _orthogonal_projection_stats(delta: np.ndarray, w: np.ndarray) -> dict:
+    d_norm = float(np.linalg.norm(delta))
+    if d_norm < 1e-12:
+        return {"delta_norm": 0.0, "along": 0.0, "perp_norm": 0.0, "eta": float("nan")}
+    along = float(np.dot(w, delta))
+    eta = (along * along) / (d_norm * d_norm)
+    perp_norm = float(np.sqrt(max(d_norm * d_norm - along * along, 0.0)))
+    return {"delta_norm": d_norm, "along": along, "perp_norm": perp_norm, "eta": float(eta)}
+
+
+def _projector_C_subspace(omega_0: np.ndarray, omega_k: np.ndarray) -> np.ndarray | None:
+    """Return U in R^{d x 2} with orthonormal columns spanning {omega_0, omega_k}, or None."""
+    n0 = np.linalg.norm(omega_0)
+    nk = np.linalg.norm(omega_k)
+    if n0 < 1e-12 or nk < 1e-12:
+        return None
+    u1 = omega_0 / n0
+    tilde_k = omega_k / nk
+    proj = float(u1 @ tilde_k) * u1
+    rem = tilde_k - proj
+    rem_norm = np.linalg.norm(rem)
+    if rem_norm < 1e-10:
+        return u1[:, None]  # degenerate: 1-D subspace
+    u2 = rem / rem_norm
+    return np.stack([u1, u2], axis=1)
+
+
+def compute_drift_orthogonal_projection(
+    features,
+    meta,
+    *,
+    identity_dim: int,
+    source_idx: int = 1,
+    shuffle_seed: int = 0,
+    shuffle_reps: int = 200,
+):
+    """Point 3: drift-orthogonal projection of identity drift Delta.
+
+    For every PID p with severities 0 and k=1..4 at the given source_idx, compute
+      - Delta     = z^id_k - z^id_0
+      - w_B       = (omega_0 + omega_k) / ||omega_0 + omega_k||   (midpoint, primary; paper eq. 4)
+      - w_A       = omega_k / ||omega_k||                          (per-sample, legacy; §5.1)
+      - w_ref     = omega_0 / ||omega_0||                          (reference-point; supplement §2)
+      - U         = GS orthonormalisation of (omega_0, omega_k)    (2-D, supporting)
+      - eta_B     = (w_B^T Delta)^2 / ||Delta||^2
+      - eta_A     = (w_A^T Delta)^2 / ||Delta||^2
+      - eta_ref   = (w_ref^T Delta)^2 / ||Delta||^2
+      - eta_C     = ||U^T Delta||^2 / ||Delta||^2 = cos^2 theta_1
+      - cos_omega_0_k  = (omega_0 . omega_k) / (||omega_0|| ||omega_k||)
+      - finsler_distance = ||Delta|| + 0.5 ||omega_0 + omega_k|| * (w_B^T Delta)
+
+    See changelogs/toy_dataset_reference_projector_supplement.md for the w_ref
+    projector, its conditional ordering relative to w_B, and the validity gauge
+    role of cos_omega_0_k.
+
+    Shuffle null: recompute eta_B, eta_C, eta_ref after permuting the
+    (omega_0, omega_k) pairing against Delta (preserves empirical marginals;
+    tests conditional coupling between drift subspace and identity drift).
+    """
+    groups = _group_by_pid_source_severity(features, meta)
+    per_pair = []  # list of dicts
+
+    # Collect per (pid, k)
+    for pid, by_src in groups.items():
+        by_sev = by_src.get(source_idx)
+        if by_sev is None or 0 not in by_sev:
+            continue
+        fname0, feat0 = by_sev[0]
+        z0 = feat0[:identity_dim].cpu().numpy().astype(np.float64)
+        om0 = feat0[identity_dim:].cpu().numpy().astype(np.float64)
+        for k in (1, 2, 3, 4):
+            if k not in by_sev:
+                continue
+            fnamek, featk = by_sev[k]
+            zk = featk[:identity_dim].cpu().numpy().astype(np.float64)
+            omk = featk[identity_dim:].cpu().numpy().astype(np.float64)
+            delta = zk - z0
+
+            # B: midpoint projector (primary)
+            mid = om0 + omk
+            mid_n = np.linalg.norm(mid)
+            if mid_n < 1e-12:
+                continue
+            w_B = mid / mid_n
+            stats_B = _orthogonal_projection_stats(delta, w_B)
+
+            # A: per-sample projector (legacy reference; uses omega_k)
+            omk_n = np.linalg.norm(omk)
+            stats_A = {"eta": float("nan"), "delta_norm": stats_B["delta_norm"], "perp_norm": float("nan")}
+            if omk_n >= 1e-12:
+                w_A = omk / omk_n
+                stats_A = _orthogonal_projection_stats(delta, w_A)
+
+            # ref: reference-point projector (uses omega_0; supplement §2)
+            om0_n = float(np.linalg.norm(om0))
+            stats_ref = {"eta": float("nan"), "delta_norm": stats_B["delta_norm"],
+                         "perp_norm": float("nan"), "along": float("nan")}
+            if om0_n >= 1e-12:
+                w_ref = om0 / om0_n
+                stats_ref = _orthogonal_projection_stats(delta, w_ref)
+
+            # cosine similarity between the clean and perturbed drift vectors
+            if om0_n < 1e-12 or omk_n < 1e-12:
+                cos_0k = float("nan")
+            else:
+                cos_0k = float(np.dot(om0, omk) / (om0_n * omk_n))
+
+            # C: 2-D GS projector (supporting)
+            U = _projector_C_subspace(om0, omk)
+            if U is None:
+                eta_C = float("nan"); perp_C = float("nan")
+            else:
+                UtD = U.T @ delta
+                cap = float(UtD @ UtD)
+                d2 = float(delta @ delta)
+                eta_C = cap / d2 if d2 > 0 else float("nan")
+                perp_C = float(np.sqrt(max(d2 - cap, 0.0)))
+
+            # Randers coupling scalar: 1/2 * ||om0+omk|| * (w_B^T Delta)
+            randers_term = 0.5 * mid_n * stats_B["along"]
+            # Mean Finsler distance between the full embeddings (identity term + Randers term)
+            finsler_d = float(stats_B["delta_norm"] + randers_term)
+
+            per_pair.append({
+                "pid": int(pid),
+                "source_idx": int(source_idx),
+                "severity_k": int(k),
+                "delta_norm": stats_B["delta_norm"],
+                "eta_A": stats_A["eta"],
+                "eta_B": stats_B["eta"],
+                "eta_C": float(eta_C),
+                "eta_ref": stats_ref["eta"],
+                "perp_B_norm": stats_B["perp_norm"],
+                "perp_C_norm": float(perp_C),
+                "perp_ref_norm": stats_ref["perp_norm"],
+                "cos_omega_0_k": cos_0k,
+                "randers_asymmetry_term": float(randers_term),
+                "finsler_distance": finsler_d,
+                "omega0_norm": om0_n,
+                "omegak_norm": float(omk_n),
+                "omega_midpoint_norm": float(mid_n),
+            })
+
+    # Aggregate by severity k
+    per_k: dict = {}
+    for k in (1, 2, 3, 4):
+        rows = [r for r in per_pair if r["severity_k"] == k]
+        if not rows:
+            per_k[k] = {"n": 0}
+            continue
+        per_k[k] = {
+            "n": len(rows),
+            "eta_A_mean": float(np.nanmean([r["eta_A"] for r in rows])),
+            "eta_B_mean": float(np.nanmean([r["eta_B"] for r in rows])),
+            "eta_C_mean": float(np.nanmean([r["eta_C"] for r in rows])),
+            "eta_ref_mean": float(np.nanmean([r["eta_ref"] for r in rows])),
+            "eta_B_std": float(np.nanstd([r["eta_B"] for r in rows])),
+            "eta_C_std": float(np.nanstd([r["eta_C"] for r in rows])),
+            "eta_ref_std": float(np.nanstd([r["eta_ref"] for r in rows])),
+            "delta_norm_mean": float(np.mean([r["delta_norm"] for r in rows])),
+            "randers_term_mean": float(np.mean([r["randers_asymmetry_term"] for r in rows])),
+            "cos_omega_0_k_mean": float(np.nanmean([r["cos_omega_0_k"] for r in rows])),
+            "cos_omega_0_k_std": float(np.nanstd([r["cos_omega_0_k"] for r in rows])),
+            "perp_ref_norm_mean": float(np.nanmean([r["perp_ref_norm"] for r in rows])),
+            "perp_ref_norm_std": float(np.nanstd([r["perp_ref_norm"] for r in rows])),
+            "finsler_distance_mean": float(np.mean([r["finsler_distance"] for r in rows])),
+            "finsler_distance_std": float(np.std([r["finsler_distance"] for r in rows])),
+        }
+
+    # Shuffle null: permute the (om0, omk) pairing across PIDs within each k.
+    rng = np.random.default_rng(int(shuffle_seed))
+    shuffle_nulls = {k: {"eta_B": [], "eta_C": [], "eta_ref": []} for k in (1, 2, 3, 4)}
+    # Pre-collect per-k arrays for a vectorised shuffle
+    per_k_arrays: dict = {}
+    for k in (1, 2, 3, 4):
+        rows = [r for r in per_pair if r["severity_k"] == k]
+        if not rows:
+            continue
+        # Reconstruct arrays
+        deltas, mids, Us, om0s = [], [], [], []
+        for pid, by_src in groups.items():
+            by_sev = by_src.get(source_idx)
+            if by_sev is None or 0 not in by_sev or k not in by_sev:
+                continue
+            _, f0 = by_sev[0]
+            _, fk = by_sev[k]
+            z0 = f0[:identity_dim].cpu().numpy().astype(np.float64)
+            zk = fk[:identity_dim].cpu().numpy().astype(np.float64)
+            om0 = f0[identity_dim:].cpu().numpy().astype(np.float64)
+            omk = fk[identity_dim:].cpu().numpy().astype(np.float64)
+            deltas.append(zk - z0)
+            mids.append(om0 + omk)
+            Us.append(_projector_C_subspace(om0, omk))
+            om0s.append(om0)
+        per_k_arrays[k] = (deltas, mids, Us, om0s)
+
+    for k, (deltas, mids, Us, om0s) in per_k_arrays.items():
+        n = len(deltas)
+        if n < 2:
+            continue
+        for _ in range(int(shuffle_reps)):
+            perm = rng.permutation(n)
+            etaB_vals, etaC_vals, etaref_vals = [], [], []
+            for i in range(n):
+                d = deltas[i]
+                mid = mids[perm[i]]
+                U = Us[perm[i]]
+                om0_sh = om0s[perm[i]]
+                d2 = float(d @ d)
+                if d2 < 1e-12:
+                    continue
+                mid_n = np.linalg.norm(mid)
+                if mid_n < 1e-12:
+                    continue
+                w_B = mid / mid_n
+                along = float(w_B @ d)
+                etaB_vals.append((along * along) / d2)
+                if U is not None:
+                    UtD = U.T @ d
+                    etaC_vals.append(float(UtD @ UtD) / d2)
+                om0_sh_n = np.linalg.norm(om0_sh)
+                if om0_sh_n >= 1e-12:
+                    w_ref_sh = om0_sh / om0_sh_n
+                    along_ref = float(w_ref_sh @ d)
+                    etaref_vals.append((along_ref * along_ref) / d2)
+            if etaB_vals:
+                shuffle_nulls[k]["eta_B"].append(float(np.mean(etaB_vals)))
+            if etaC_vals:
+                shuffle_nulls[k]["eta_C"].append(float(np.mean(etaC_vals)))
+            if etaref_vals:
+                shuffle_nulls[k]["eta_ref"].append(float(np.mean(etaref_vals)))
+
+    shuffle_summary = {}
+    for k, d in shuffle_nulls.items():
+        shuffle_summary[k] = {
+            "n_reps": len(d["eta_B"]),
+            "eta_B_null_mean": float(np.mean(d["eta_B"])) if d["eta_B"] else float("nan"),
+            "eta_B_null_std":  float(np.std(d["eta_B"]))  if d["eta_B"] else float("nan"),
+            "eta_C_null_mean": float(np.mean(d["eta_C"])) if d["eta_C"] else float("nan"),
+            "eta_C_null_std":  float(np.std(d["eta_C"]))  if d["eta_C"] else float("nan"),
+            "eta_ref_null_mean": float(np.mean(d["eta_ref"])) if d["eta_ref"] else float("nan"),
+            "eta_ref_null_std":  float(np.std(d["eta_ref"]))  if d["eta_ref"] else float("nan"),
+        }
+
+    return {
+        "source_idx": int(source_idx),
+        "identity_dim": int(identity_dim),
+        "analytic_null_B": 1.0 / float(identity_dim),
+        "analytic_null_C": 2.0 / float(identity_dim),
+        "per_pair": per_pair,
+        "per_severity_k": per_k,
+        "shuffle_null": shuffle_summary,
+    }
+
+
+def compute_pairwise_drift_shift_spearman(features, meta, identity_dim: int):
+    """H1c: Spearman(|sigma_i - sigma_j|, ||omega_i - omega_j||) over within-PID pairs."""
+    groups = _group_by_pid_source_severity(features, meta)
+    sev_diffs, om_diffs = [], []
+    for pid, by_src in groups.items():
+        # pool all (source, severity) samples for this PID
+        items = []
+        for src, by_sev in by_src.items():
+            for sev, (fname, feat) in by_sev.items():
+                items.append((src, sev, feat[identity_dim:].cpu().numpy().astype(np.float64)))
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                s_i, sev_i, om_i = items[i]
+                s_j, sev_j, om_j = items[j]
+                sev_diffs.append(abs(sev_i - sev_j))
+                om_diffs.append(float(np.linalg.norm(om_i - om_j)))
+    if not sev_diffs:
+        return {"rho": float("nan"), "pval": float("nan"), "n_pairs": 0}
+    rho, pval = stats.spearmanr(sev_diffs, om_diffs)
+    return {"rho": float(rho), "pval": float(pval), "n_pairs": int(len(sev_diffs))}
 
 
 def plot_omega_identity_pca_panels(
@@ -626,11 +1324,12 @@ def plot_qualitative_retrieval(eucl_topk, finsler_topk, dataset_dir, output_path
         axes = axes[np.newaxis, :]
 
     gallery_dir = osp.join(dataset_dir, "gallery")
-    query_dir = osp.join(dataset_dir, "query")
+    query_s1_dir = osp.join(dataset_dir, "query_s1")
+    query_s2_dir = osp.join(dataset_dir, "query_s2")
     all_dir = osp.join(dataset_dir, "bounding_box_test")
 
     def load_img(fname):
-        for d in [query_dir, gallery_dir, all_dir]:
+        for d in [query_s1_dir, query_s2_dir, gallery_dir, all_dir]:
             p = osp.join(d, fname)
             if osp.exists(p):
                 return Image.open(p).convert("RGB")
@@ -665,7 +1364,7 @@ def plot_qualitative_retrieval(eucl_topk, finsler_topk, dataset_dir, output_path
                     spine.set_visible(True)
                     spine.set_color(color)
                     spine.set_linewidth(3)
-                sev = int(item["camid"]) - 1
+                sev = int(item.get("severity", int(item["camid"]) - 1))
                 ax.set_title(f"s={sev}", fontsize=7)
                 ax.axis("off")
 
@@ -792,9 +1491,41 @@ def main():
         default="paper/draft_4/toy_analysis",
         help="Mirror all files from --output-dir here; set to empty string to disable",
     )
+    parser.add_argument(
+        "--omega-cos-transport",
+        type=str,
+        default="ambient",
+        choices=("ambient", "parallel"),
+        help="Drift cosine matrix variant (Point 2). ambient = free-vector cosine (primary); "
+             "parallel = Pennec (2006) closed-form parallel transport on the identity sphere.",
+    )
+    parser.add_argument(
+        "--projection-report",
+        type=str,
+        default="B_primary",
+        choices=("B_primary", "all"),
+        help="Point 3 projector reporting. B_primary = paper-facing midpoint figure only; "
+             "all = also include legacy per-sample P_A and 2-D P_C in the PDF.",
+    )
+    parser.add_argument(
+        "--projection-shuffle-reps",
+        type=int,
+        default=200,
+        help="Number of permutations for the Point 3 shuffle null (default: 200).",
+    )
+    parser.add_argument(
+        "--skip-v3-diagnostics",
+        action="store_true",
+        help="Skip Points 1a/1b/2/3 even on v3.0 data (legacy v2.0 output only).",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
+
+    dataset_version = _detect_dataset_version(args.dataset_dir)
+    is_v3 = dataset_version.startswith("3") and not args.skip_v3_diagnostics
+    print(f"Detected ToyCorruption dataset version: {dataset_version} "
+          f"(v3 diagnostics {'enabled' if is_v3 else 'disabled'})")
 
     # -----------------------------------------------------------------------
     # 1. Load models
@@ -817,7 +1548,11 @@ def main():
     print("\n" + "=" * 60)
     print("Extracting features on toy dataset...")
     transform = get_test_transform(args.height, args.width)
-    all_dataset = ToyDataset(osp.join(args.dataset_dir, "bounding_box_test"), transform=transform)
+    all_dataset = ToyDataset(
+        osp.join(args.dataset_dir, "bounding_box_test"),
+        transform=transform,
+        dataset_version=dataset_version,
+    )
     all_loader = DataLoader(all_dataset, batch_size=args.batch_size, shuffle=False,
                             num_workers=4, pin_memory=True)
 
@@ -959,6 +1694,143 @@ def main():
         omega_strip_path,
         identity_dim=identity_dim,
     )
+
+    # -----------------------------------------------------------------------
+    # 4b. v3.0 asymmetry diagnostics (Points 1a / 1b / 2 / 3)
+    # -----------------------------------------------------------------------
+    if is_v3:
+        print("\n" + "=" * 60)
+        print("v3.0 diagnostics: Points 1a, 1b, 2, 3 (see changelogs/toy_dataset_asymmetry_diagnostics.md)")
+
+        # --- Point 1a: cross-source, cross-severity retrieval -----------------
+        print("  [1a] Cross-source, cross-severity 5x5 mAP matrix (d_E and d_F)...")
+        p1a_dE = compute_cross_source_severity_retrieval(
+            eucl_features, meta, identity_dim=identity_dim, scoring="dE_full",
+        )
+        p1a_dF = compute_cross_source_severity_retrieval(
+            finsler_features, meta, identity_dim=identity_dim, scoring="dF_midpoint",
+            dist_func=dist_func,
+        )
+
+        # Paper figures: mean mAP per direction, plus d_F asymmetry
+        make_cross_severity_heatmap(
+            p1a_dE["mAP_mean"],
+            osp.join(args.output_dir, "fig_cross_severity_mAP_dE.pdf"),
+            cbar_label="mAP (%)", cmap="viridis",
+        )
+        make_cross_severity_heatmap(
+            p1a_dF["mAP_mean"],
+            osp.join(args.output_dir, "fig_cross_severity_mAP_dF.pdf"),
+            cbar_label="mAP (%)", cmap="viridis",
+        )
+        make_cross_severity_heatmap(
+            p1a_dF["asymmetry_A"],
+            osp.join(args.output_dir, "fig_cross_severity_asymmetry_A.pdf"),
+            cbar_label=r"$A_{\sigma_q,\sigma_g}$ (pp)", diverging=True,
+        )
+
+        # Per-direction asymmetry matrices (source-averaging removed) so the
+        # task-difficulty baseline in d_E and the Randers correction in d_F can
+        # be read off without cross-source cancellation. Four PDFs total.
+        for tag, p1a_block in (("dE", p1a_dE), ("dF", p1a_dF)):
+            per_dir = p1a_block["mAP_per_direction"]
+            for dir_key, mat in per_dir.items():
+                arr = np.array(mat, dtype=np.float64)
+                A_dir = arr - arr.T
+                src = dir_key.replace("->", "to")  # "1to2" / "2to1"
+                out_path = osp.join(
+                    args.output_dir,
+                    f"fig_cross_severity_asymmetry_A_{tag}_{src}.pdf",
+                )
+                make_cross_severity_heatmap(
+                    A_dir.tolist(),
+                    out_path,
+                    cbar_label=r"$A_{\sigma_q,\sigma_g}$ (pp)",
+                    diverging=True,
+                )
+
+        # --- Point 1b: same-source cross-severity retrieval (ablation) -------
+        print("  [1b] Same-source cross-severity retrieval (ablation)...")
+        p1b_dE = compute_same_source_severity_retrieval(
+            eucl_features, meta, identity_dim=identity_dim, scoring="dE_full",
+        )
+        p1b_dF = compute_same_source_severity_retrieval(
+            finsler_features, meta, identity_dim=identity_dim, scoring="dF_midpoint",
+            dist_func=dist_func,
+        )
+
+        # --- H1c: pair-wise drift-shift Spearman ------------------------------
+        print("  [H1c] Pair-wise drift-shift Spearman...")
+        h1c = compute_pairwise_drift_shift_spearman(
+            finsler_features, meta, identity_dim=identity_dim,
+        )
+        print(f"        rho = {h1c['rho']:.4f}, p = {h1c['pval']:.2e}, n = {h1c['n_pairs']}")
+
+        # Extend retrieval_metrics.json with the v3 block and H1c
+        with open(retrieval_path) as f:
+            existing = json.load(f)
+        existing.update({
+            "cross_source_severity_dE": p1a_dE,
+            "cross_source_severity_dF": p1a_dF,
+            "same_source_severity_dE": p1b_dE,
+            "same_source_severity_dF": p1b_dF,
+            "drift_shift_spearman_H1c": h1c,
+            "toy_dataset_version": dataset_version,
+        })
+        with open(retrieval_path, "w") as f:
+            json.dump(existing, f, indent=2)
+        print(f"  Appended v3 retrieval tensors to {retrieval_path}")
+        print(f"  |A|_max (d_F) = {p1a_dF['asymmetry_max_abs']:.4f} "
+              f"(H1b falsifier threshold: 0.03)")
+
+        # --- Point 2: drift cosine matrix ------------------------------------
+        print(f"  [2] Drift cosine matrix (transport={args.omega_cos_transport})...")
+        cos_result, _C, _keys, _pids, _srcs, _sevs = compute_drift_cosine_matrix(
+            finsler_features, meta, identity_dim=identity_dim,
+            transport=args.omega_cos_transport,
+        )
+        cos_path = osp.join(args.output_dir, "omega_cosine_blocks.json")
+        with open(cos_path, "w") as f:
+            json.dump(cos_result, f, indent=2)
+        print(f"  Saved cosine block means + full matrix to {cos_path}")
+        make_cosine_block_bar(
+            cos_result["block_means"],
+            osp.join(args.output_dir, "fig_omega_cosine_blocks.pdf"),
+        )
+
+        # --- Point 3: drift-orthogonal projection ---------------------------
+        print("  [3] Drift-orthogonal projection of identity drift "
+              f"(source_idx=1, shuffle_reps={args.projection_shuffle_reps})...")
+        proj = compute_drift_orthogonal_projection(
+            finsler_features, meta, identity_dim=identity_dim, source_idx=1,
+            shuffle_reps=args.projection_shuffle_reps,
+        )
+        proj_path = osp.join(args.output_dir, "drift_orthogonal_projection.json")
+        with open(proj_path, "w") as f:
+            json.dump(proj, f, indent=2)
+        print(f"  Saved per-pair projection + shuffle null to {proj_path}")
+        # Figures
+        make_drift_absorption_plot(
+            proj["per_severity_k"],
+            proj["analytic_null_B"],
+            proj["analytic_null_C"],
+            proj["shuffle_null"],
+            osp.join(args.output_dir, "fig_drift_orthogonal_absorption.pdf"),
+        )
+        make_drift_alignment_plot(
+            proj["per_severity_k"],
+            proj["shuffle_null"],
+            osp.join(args.output_dir, "fig_drift_alignment.pdf"),
+        )
+        # Report H3 + H4/H5 summaries
+        for k in (1, 2, 3, 4):
+            pk = proj["per_severity_k"].get(k) or proj["per_severity_k"].get(str(k))
+            if pk and pk.get("n", 0) > 0:
+                print(f"    k={k}: eta_B={pk['eta_B_mean']:.4f} (analytic null {proj['analytic_null_B']:.2e}), "
+                      f"eta_C={pk['eta_C_mean']:.4f} (analytic null {proj['analytic_null_C']:.2e}), "
+                      f"eta_ref={pk.get('eta_ref_mean', float('nan')):.4f}, "
+                      f"cos(om0,omk)={pk.get('cos_omega_0_k_mean', float('nan')):.3f}, "
+                      f"dF={pk.get('finsler_distance_mean', float('nan')):.4f}")
 
     # -----------------------------------------------------------------------
     # 5. Qualitative rank-list comparison

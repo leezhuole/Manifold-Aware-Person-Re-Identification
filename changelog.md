@@ -1,5 +1,20 @@
 # Changelog
 
+**Timestamp:** 2026-04-22
+
+## [2026-04-22] - Added mathematical derivation of residual variance in `toy_dataset_asymmetry_diagnostics.md`
+
+### Files modified
+- `changelogs/toy_dataset_asymmetry_diagnostics.md` — Added formal Pythagorean derivation of the component of the identity drift unmatched by the 1D Finsler subspace projector $\mathbf{P}_B^\perp$.
+
+### Problem this addresses
+The mathematical steps linking the Randers asymmetry term to the closed-form orthogonal projection residual variance expression were unstated, hindering reproducibility and immediate clarity. 
+
+### Expected behavior
+Readers will find a clear, step-by-step algebraic breakdown of the squared $\ell_2$-norm evaluation directly below the equation text in the design document.
+
+---
+
 **Timestamp:** 2026-04-14
 
 ## [2026-04-14] - paper: Related Work asymmetric shift + `nguyen2024agreidv2` bib
@@ -1353,3 +1368,12 @@ Prior sweeps tested drift auxiliaries (1c, 1d, 1e) exclusively under the 1a regi
 ### Expected Behavior
 
 EXP 0/1 are the highest-priority runs: if Unified Finsler + 1d or 1c under domain conditioning exceeds 44.1 mAP or 44.9 R1, it establishes a new best. EXP 2 tests whether 1c+1d avoids the degradation seen in 1c+1d+1e (the uniformity objective 1e was the likely conflict source). EXP 3 should show marginal gains from eval-drift and bidirectional on the already-strong 1a+1d arm. EXP 4 probes whether 0.1 was suboptimal for 1d. EXP 5 is expected to degrade (validating the interference thesis), but if it doesn't, the interference is 1a-regime-specific and the paper narrative needs revision.
+
+## [2026-04-22 22:20:29] Created missing runs for Idea 1 ablation with Euclidean domain loss
+* **Files altered:** Added `sbatch/sweep_loss_ablation_Idea1_1d1e_EuclideanDom.sbatch`
+* **Problem solved:** The ablation table had missing runs under the Euclidean Domain Loss configuration for runs `1a+1d`, `1a+1e`, `1a+1d+1e`, and `Unified Finsler + 1c`, focused entirely on instance conditioning.
+* **Expected behavior:** Executing the new sbatch script will perform a 4-run array job filling the gap for Euclidean L_domain instance-conditioning experiments. The `--identity-triplet-only` flag correctly encapsulates all `1a` variations but is actively dropped for the `Unified Finsler + 1c` run.
+
+## [2026-04-23 13:39:13] Parsed logs for Euclidean domain loss Idea 1 ablation
+* **Problem solved:** Requested to populate the missing cells for Euclidean domain loss (instance conditioning) on runs 1a+1d, 1a+1e, 1a+1d+1e, and Unified + 1c.
+* **Files altered:** Extracted logs into `results/metric sweeps/sweep_loss_ablation_Idea1_1d1e_EuclideanDom_metrics_missing.md`
