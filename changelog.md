@@ -1,5 +1,40 @@
 # Changelog
 
+**Timestamp:** 2026-05-02
+
+## [2026-05-02] - Strip `bau/` back to upstream BAU; archive custom extensions
+
+### Motivation
+The toy dataset v4 experiments require a clean Euclidean baseline against which the Finsler model is compared. All Finsler-specific modifications accumulated in `bau/` over the course of the project obscured this baseline and made the codebase harder to reason about. Moving them to a separate, untracked `archive/` directory keeps the active repository minimal and the baseline provenance unambiguous.
+
+### Files removed from `bau/`
+- `bau/datasets/agreidv2.py` — Custom AG-ReID.v2 dataset class (deleted; moved to `archive/bau/datasets/`).
+- `bau/docs/` — All meeting-notes PDFs and analysis documents (`Idea1_1d1e_results_analysis.md`, `finsler_disentanglement_analysis.md`, and dated PDFs from 2025-12 to 2026-04).
+- `bau/utils/visualisation.py` — Custom visualisation utilities.
+- `examples/train_bauDEBUG.py` — Debug training script for Finsler experiments.
+
+### Files reverted to upstream BAU
+- `bau/datasets/__init__.py`, `bau/datasets/cuhksysu.py`
+- `bau/evaluators.py`
+- `bau/loss/__init__.py`, `bau/loss/triplet.py`
+- `bau/models/__init__.py`, `bau/models/memory.py`, `bau/models/model.py`
+- `bau/trainers.py`
+- `bau/utils/data/base_dataset.py`, `bau/utils/data/preprocessor.py`, `bau/utils/data/sampler.py`, `bau/utils/data/randaugment.py`
+- `examples/test.py`, `examples/train_bau.py`
+
+### Files added
+- `changelogs/toy_dataset_v4.md` — Design document and diagnostics for the toy dataset v4 experiments.
+- `sbatch/toy_corruption_baseline_train.sbatch` — SLURM recipe for the ToyCorruption Euclidean baseline (single GPU, `conda activate BAU`).
+- `train.sh` — Convenience shell wrapper for local training runs.
+
+### Archive
+All removed/modified custom code is preserved in `archive/bau/` (untracked by git). The `archive/` directory also contains prior `examples/`, `wandb/` run artifacts, and the `finsler_single_AGReIDv2.sbatch` recipe for reference.
+
+### Expected behavior
+`bau/` now matches the upstream BAU repository exactly (modulo the NumPy 2.x `randaugment.py` fix documented 2026-04-29). Running `examples/train_bau.py` from this directory trains the Euclidean baseline without any Finsler code paths present.
+
+---
+
 **Timestamp:** 2026-04-30
 
 ## [2026-04-30] - Revert `old_bau/BAU` submodule; restore nested clone
