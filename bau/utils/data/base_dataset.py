@@ -74,8 +74,8 @@ class MultiSourceTrainDataset(BaseImageDataset):
 
     def _check_before_run(self):
         """Check if all files are available before going deeper"""
-        if len(self.datasets) < 1:
-            raise RuntimeError("At least one source training dataset is required.")
+        if not len(self.datasets) > 0:
+            raise RuntimeError("More than one source training dataset is required.")
 
     def _merge_data(self, datasets):
         merged_dataset = []

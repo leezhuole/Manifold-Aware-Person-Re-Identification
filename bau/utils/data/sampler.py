@@ -92,7 +92,7 @@ class RandomMultipleGallerySampler(Sampler):
         self.pid_index = defaultdict(list)
         self.num_instances = num_instances
 
-        for index, (_, pid, cam, _) in enumerate(data_source):
+        for index, (_, pid, cam) in enumerate(data_source):
             if (pid<0): continue
             self.index_pid[index] = pid
             self.pid_cam[pid].append(cam)
@@ -111,7 +111,7 @@ class RandomMultipleGallerySampler(Sampler):
         for kid in indices:
             i = random.choice(self.pid_index[self.pids[kid]])
 
-            _, i_pid, i_cam, _ = self.data_source[i]
+            _, i_pid, i_cam = self.data_source[i]
 
             ret.append(i)
 
@@ -142,60 +142,3 @@ class RandomMultipleGallerySampler(Sampler):
                     ret.append(index[kk])
 
         return iter(ret)
-
-
-class RandomDomainBalancedSampler(Sampler):
-    """Sample batches with fixed number of nuisance groups and instances per group.
-
-    Each output step contributes ``num_groups * instances_per_group`` indices (one batch).
-    ``group_by='camera'`` uses camera id (tuple index 2); ``group_by='dataset'`` uses
-    dataset id (tuple index 3), requiring 4-tuple entries in ``data_source``.
-    """
-
-    def __init__(self, data_source, batch_size, instances_per_group, group_by='camera'):
-        if batch_size % instances_per_group != 0:
-            raise ValueError(
-                'batch_size must be divisible by instances_per_group, got {} and {}'.format(
-                    batch_size, instances_per_group
-                )
-            )
-        self.data_source = data_source
-        self.batch_size = batch_size
-        self.instances_per_group = instances_per_group
-        self.num_groups = batch_size // instances_per_group
-        self.group_by = group_by
-        label_idx = 2 if group_by == 'camera' else 3
-        self.label_to_indices = defaultdict(list)
-        for index, items in enumerate(data_source):
-            if group_by == 'dataset' and len(items) < 4:
-                raise ValueError(
-                    'RandomDomainBalancedSampler with group_by=dataset requires 4-tuple train entries'
-                )
-            lab = items[label_idx]
-            self.label_to_indices[lab].append(index)
-        self.labels = list(self.label_to_indices.keys())
-        if len(self.labels) < self.num_groups:
-            raise ValueError(
-                'Not enough distinct {} labels ({}); need >= num_groups={}'.format(
-                    group_by, len(self.labels), self.num_groups
-                )
-            )
-        num_batches = max(1, len(data_source) // batch_size)
-        self.length = num_batches * batch_size
-
-    def __len__(self):
-        return self.length
-
-    def __iter__(self):
-        n_batches = self.length // self.batch_size
-        final_idxs = []
-        for _ in range(n_batches):
-            chosen = random.sample(self.labels, self.num_groups)
-            for lab in chosen:
-                idxs = self.label_to_indices[lab]
-                replace = len(idxs) < self.instances_per_group
-                picks = np.random.choice(
-                    idxs, size=self.instances_per_group, replace=replace
-                )
-                final_idxs.extend(int(x) for x in picks.tolist())
-        return iter(final_idxs)

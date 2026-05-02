@@ -50,21 +50,7 @@ def main():
 
 
 def create_model(args,):
-    if args.arch == 'resnet50_finsler':
-        model = models.create(
-            args.arch,
-            use_drift_in_eval=args.eval_drift,
-            drift_dim=args.drift_dim,
-            drift_method=args.drift_method,
-            drift_conditioning=args.drift_conditioning,
-            num_domains=args.num_domains,
-            domain_embed_dim=args.domain_embed_dim,
-            infer_domain_conditioning=args.infer_domain_conditioning,
-            domain_temperature=args.domain_temperature,
-            domain_residual_scale=args.domain_residual_scale,
-        )
-    else:
-        model = models.create(args.arch)
+    model = models.create(args.arch)
     model.cuda()
     model = torch.nn.DataParallel(model)
     return model
@@ -86,8 +72,7 @@ def main_worker(args):
     # load a checkpoint
     print("Load {}".format(args.resume))
     checkpoint = load_checkpoint(args.resume)
-    state_dict = checkpoint.get('state_dict', checkpoint) if isinstance(checkpoint, dict) else checkpoint
-    copy_state_dict(state_dict, model)
+    copy_state_dict(checkpoint, model)
 
     # evaluate
     evaluator = Evaluator(model)
@@ -107,32 +92,12 @@ if __name__ == '__main__':
 
     # path
     working_dir = osp.dirname(osp.abspath(__file__))
-    # parser.add_argument('--data-dir', type=str, metavar='PATH', default=osp.join(working_dir, 'data'))
-    parser.add_argument('--data-dir', type=str, metavar='PATH', default="/home/stud/leez/storage/user/reid/data")
+    parser.add_argument('--data-dir', type=str, metavar='PATH', default=osp.join(working_dir, 'data'))
 
     # testing configs
     parser.add_argument('-a', '--arch', type=str, default='resnet50', choices=models.names())
     parser.add_argument('--resume', type=str, required=True, metavar='PATH')
     parser.add_argument('--rerank', action='store_true', help="evaluation only")
     parser.add_argument('--seed', type=int, default=1)
-    parser.add_argument('--eval-drift', type=lambda x: x.lower() == 'true', default=True,
-                        help='use drift branch in evaluation ranking (resnet50_finsler only)')
-    parser.add_argument('--drift-method', type=str, default='symmetric_trapezoidal',
-                        choices=['constant_drift', 'symmetric_trapezoidal', 'slerp', 'analytical'],
-                        help='method for calculating the finsler drift asymmetry (resnet50_finsler only)')
-    parser.add_argument('--drift-dim', type=int, default=2048,
-                        help='drift branch embedding dimension (resnet50_finsler only)')
-    parser.add_argument('--drift-conditioning', type=str, default='instance', choices=['instance', 'domain'],
-                        help='choose whether drift is conditioned per instance or per source domain')
-    parser.add_argument('--num-domains', type=int, default=0,
-                        help='number of source domains used by a domain-conditioned resnet50_finsler checkpoint')
-    parser.add_argument('--domain-embed-dim', type=int, default=64,
-                        help='latent embedding width used for domain-conditioned drift prototypes')
-    parser.add_argument('--infer-domain-conditioning', type=lambda x: x.lower() == 'true', default=True,
-                        help='infer a soft domain token from images during evaluation when using domain-conditioned drift')
-    parser.add_argument('--domain-temperature', type=float, default=1.0,
-                        help='softmax temperature for inferred domain tokens during evaluation')
-    parser.add_argument('--domain-residual-scale', type=float, default=0.1,
-                        help='residual per-instance correction added on top of the domain drift prototype')
 
     main()

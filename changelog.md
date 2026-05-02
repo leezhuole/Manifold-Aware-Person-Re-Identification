@@ -1,5 +1,51 @@
 # Changelog
 
+**Timestamp:** 2026-04-30
+
+## [2026-04-30] - Revert `old_bau/BAU` submodule; restore nested clone
+
+### Files modified
+- `.gitmodules` — Removed (submodule registration dropped).
+- `scripts/diff_old_bau_upstream.sh` — Removed when present (helper added for the submodule experiment).
+- Parent `.git/config` — Removed `[submodule "old_bau/BAU"]`.
+- `old_bau/BAU/.git/config` — Removed stale `core.worktree` left from the submodule layout after moving `.git/modules/old_bau/BAU` to `old_bau/BAU/.git`.
+
+### Problem this addresses
+The submodule setup was rolled back; `old_bau/BAU` should again be a standalone nested repository (not a gitlink in the parent).
+
+### Expected behavior
+`old_bau/BAU` has a normal `.git` directory at `old_bau/BAU/.git` with the same commits as before (e.g. `17b54b9` on `main` ahead of `origin/main`). The parent repository continues to show `old_bau/` as untracked unless you choose to track it another way.
+
+---
+
+**Timestamp:** 2026-04-29
+
+## [2026-04-29] - old_bau RandAugment: replace `np.int` for NumPy 2.x / Python 3.12
+
+### Files modified
+- `old_bau/BAU/bau/utils/data/randaugment.py` — In `SolarizeAdd`, `astype(np.int)` → `astype(np.int32)` (`np.int` was removed in NumPy 2.0).
+
+### Problem this addresses
+ToyCorruption baseline training (`train_bau.py` + RandAugment on the strong view) crashed in DataLoader workers with `AttributeError: module 'numpy' has no attribute 'int'` under the BAU conda env (Python 3.12 + NumPy 2.x).
+
+### Expected behavior
+Training batches load without RandAugment `SolarizeAdd` failing; pixel arithmetic unchanged in intent.
+
+---
+
+## [2026-04-29] - Slurm recipe for old_bau ToyCorruption Euclidean baseline
+
+### Files modified
+- `sbatch/toy_corruption_baseline_train.sbatch` — New single-GPU job: `conda activate BAU`, `cd old_bau/BAU`, `srun python examples/train_bau.py` with `-ds/-dt toycorruption`, `--data-dir ../../examples/data`, `--logs-dir logs/baseline_toy`, 60 epochs / 500 iters / eval epochs 50 55 / `--seed 1`. Slurm logs under `logs/slurm_logs/`; creates `old_bau/BAU/logs/baseline_toy` before launch.
+
+### Problem this addresses
+Toy Phase-0 training commands were only documented as interactive CLI; cluster runs needed a reproducible sbatch aligned with `old_bau/BAU/train.sh` conventions.
+
+### Expected behavior
+`sbatch sbatch/toy_corruption_baseline_train.sbatch` from the repo root runs the Euclidean baseline on ToyCorruption and writes `best.pth` under `old_bau/BAU/logs/baseline_toy/` when the dataset exists at `examples/data/ToyCorruption/`.
+
+---
+
 **Timestamp:** 2026-04-22
 
 ## [2026-04-22] - Added mathematical derivation of residual variance in `toy_dataset_asymmetry_diagnostics.md`

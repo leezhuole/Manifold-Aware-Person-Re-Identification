@@ -23,7 +23,7 @@ class CUHKSYSU(BaseImageDataset):
 
         self._check_before_run()
 
-        train = self._process_dir(self.train_dir)
+        train = self._process_dir(self.train_dir, relabel=True)
 
         self.train = train
 
@@ -40,26 +40,20 @@ class CUHKSYSU(BaseImageDataset):
         if not osp.exists(self.train_dir):
             raise RuntimeError("'{}' is not available".format(self.train_dir))
 
-    def _process_dir(self, dirname):
-        img_paths = glob.glob(osp.join(dirname, '*.jpg'))
-        # num_imgs = len(img_paths)
-
-        # get all identities:
+    def _process_dir(self, dir_path, relabel=False):
+        img_paths = glob.glob(osp.join(dir_path, '*.jpg'))
+        pattern = re.compile(r'([-\d]+)_c(\d)')
         pid_container = set()
         for img_path in img_paths:
-            img_name = osp.basename(img_path)
-            pid = img_name.split('_')[0]
+            pid, _ = map(int, pattern.search(img_path).groups())
             pid_container.add(pid)
         pid2label = {pid: label for label, pid in enumerate(pid_container)}
 
-        # num_pids = len(pid_container)
-
-        # extract data
-        data = []
+        dataset = []
         for img_path in img_paths:
-            img_name = osp.basename(img_path)
-            pid = img_name.split('_')[0]
-            label = pid2label[pid]
-            data.append((img_path, label, 0)) # dummy camera id
+            pid, camid = map(int, pattern.search(img_path).groups())
+            assert 0 <= camid <= 1
+            if relabel: pid = pid2label[pid]
+            dataset.append((img_path, pid, camid))
 
-        return data
+        return dataset

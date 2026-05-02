@@ -59,16 +59,7 @@ class TwoViewPreprocessor(Dataset):
         return self._get_single_item(indices)
 
     def _get_single_item(self, index):
-        row = self.dataset[index]
-        if len(row) == 4:
-            fname, pid, cid, did = row
-        elif len(row) == 3:
-            fname, pid, cid = row
-            did = 0
-        else:
-            raise ValueError(
-                "TwoViewPreprocessor expects train tuples (path,pid,cid) or (path,pid,cid,did)"
-            )
+        fname, pid, cid, did = self.dataset[index]
         fpath = fname
         if self.root is not None:
             fpath = osp.join(self.root, fname)
@@ -81,4 +72,4 @@ class TwoViewPreprocessor(Dataset):
 
         img_w = self.transform_w(img)
         img_s = self.transform_s(img)
-        return img_w, img_s, pid, did, cid
+        return img_w, img_s, pid, did
