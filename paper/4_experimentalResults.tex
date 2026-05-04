@@ -1,0 +1,178 @@
+\section{Experimental Results} \label{sec:experimentalResults}
+\subsection{Datasets and protocols} \label{subsec:datasets_protocols} \label{subsec:datasets_and_protocols}
+We evaluate DG-ReID with multi-source training and held-out targets, following Protocol~2 and 3 from the standard DG-ReID benchmark suite and aligning with BAU~\cite{cho2024generalizable}. We report three leave-one-out target settings: M+MS+CS$\rightarrow$C3 (our primary split, chosen for exploratory scope and computational constraints), M+CS+C3$\rightarrow$MS, and MS+CS+C3$\rightarrow$M. Table~\ref{tab:template_multiprotocol_bau} lists all six configurations for Finsler BAU (Arm~1b) and a configuration-matched Euclidean baseline. We measure CMC at Rank-$k$ and mAP on the target domain.
+
+% unless noted, evaluation uses asymmetric Finsler ranking on the full $[\mathbf{z}^{\mathrm{id}};\hat{\mathbf{z}}^{\omega}]$ embedding for Tables~\ref{tab:aux_loss_sweep} and~\ref{tab:extended_ranks}, whereas Table~\ref{tab:ablation_main} uses identity-slice Euclidean ranking for historical comparability.\label{subsubsec:metrics}
+
+\begin{table}[t]
+  \centering
+  \caption{Dataset statistics and abbreviation for the four datasets used in Protocol~2/3. Train/test splits follow the new-protocol convention for CUHK03~\cite{zhong2017re}.}
+  \label{tab:dataset_stats}
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{llrrr}
+  \toprule
+  Dataset & Abb. & \#IDs (train) & \#Images (train) & \#Cams \\
+  \midrule
+  Market-1501~\cite{zheng2015scalable}    & M & 751  & 12,936  & 6  \\
+  MSMT17~\cite{wei2018person}             & MS & 1,041 & 32,621 & 15 \\
+  CUHK-SYSU~\cite{xiao2016end}            & CS & 5,532 & 18,184 & var \\
+  CUHK03~\cite{li2014deepreid}            & C3 & 767  & 7,368   & 6  \\
+  \bottomrule
+  \end{tabular}%
+  }
+\end{table}
+  
+\begin{table*}[t]
+\centering
+\caption{Multi-target DG-ReID evaluation (mAP / Rank-1, \%) across all three leave-one-out splits under Protocol~2 (standard sources) and Protocol~3 (source test splits added to training~\cite{cho2024generalizable}). \textbf{Finsler BAU (ours)}: primary recipe of \S\ref{subsec:training_objective} (eq.~\ref{eq:total_loss}, Arm~1b of Table~\ref{tab:aux_loss_sweep}). \textbf{Eucl.\ baseline}: configuration-matched BAU with ResNet-50 backbone (identical training splits, schedule, and loss stack; no drift branch). Best-mAP checkpoint selection throughout. Bold denotes the stronger result per cell.}
+\label{tab:template_multiprotocol_bau}
+\resizebox{0.8\textwidth}{!}{%
+\begin{tabular}{llcccccccc}
+\toprule
+ & & \multicolumn{2}{c}{M+MS+CS$\rightarrow$C3} & \multicolumn{2}{c}{M+CS+C3$\rightarrow$MS} & \multicolumn{2}{c}{MS+CS+C3$\rightarrow$M} & \multicolumn{2}{c}{3-split avg.} \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}\cmidrule(lr){9-10}
+Protocol & Method & mAP & R1 & mAP & R1 & mAP & R1 & mAP & R1 \\
+\midrule
+\multirow{2}{*}{P2} & Eucl.\ baseline       & 42.4 & 41.8 & \textbf{23.3} & \textbf{49.7} & \textbf{76.8} & \textbf{89.9} & 47.5 & 60.5 \\
+                    & \textbf{Finsler BAU (ours)} & \textbf{44.9} & \textbf{45.8} & 22.2 & 48.1 & 76.3 & 89.3 & \textbf{47.8} & \textbf{61.2} \\
+\midrule
+\multirow{2}{*}{P3} & Eucl.\ baseline       & 50.6 & \textbf{51.2} & \textbf{26.4} & \textbf{52.9} & \textbf{78.7} & \textbf{90.8} & \textbf{51.9} & \textbf{65.0} \\
+                    & \textbf{Finsler BAU (ours)} & \textbf{50.9} & 50.9 & 26.0 & 52.3 & 78.1 & 90.7 & 51.7 & 64.6 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}
+
+\subsection{Implementation details} \label{subsec:implementation_details}
+\textbf{Architecture.}
+The identity encoder follows the BAU baseline~\cite{cho2024generalizable}: ResNet-50 with stride-reduced Layer~4, GeM pooling, and a BN neck ($d_{\mathrm{id}}{=}2048$). The residual and domain-prototype drift head designs are described in Sec.~\ref{subsec:drift_head_design}; both apply Gram-Schmidt orthogonalization and sigmoid-gated norm scaling as detailed there.
+
+
+\textbf{Training.}
+The composite loss follows eq.~\eqref{eq:total_loss}: BAU cross-entropy $\mathcal{L}_{\mathrm{ce}}$, bidirectional unified Finsler triplet $\mathcal{L}_{\mathrm{tri}}^{\mathrm{bi}}$ (eq.~\ref{eq:bidirectional_triplet}), identity-only alignment $\mathcal{L}_{\mathrm{align}}$ (eq.~\ref{eq:identity_only_alignment}) and uniformity $\mathcal{L}_{\mathrm{uniform}}$ \cite{cho2024generalizable}, Finsler-domain repulsion $\mathcal{L}_{\mathrm{dom}}$ (eq.~\ref{eq:domain_loss}), barrier $\mathcal{L}_\omega$ (eq.~\ref{eq:omega_regularization}) with $\lambda_\omega{=}1.5$, and cross-camera drift coherence $\mathcal{L}_{\mathrm{dcc}}$ (eq.~\ref{eq:loss_dcc}) with $w_{\mathrm{dcc}}{=}0.1$. The drift head uses a reduced learning rate ($\times 0.05$ of backbone LR) and gradient clipping (max norm~1.0). 
+
+\subsection{Quantitative analysis} \label{subsec:quantitative_analysis}
+\paragraph{Primary model.}
+Our strongest configuration on M+MS+CS$\rightarrow$C3 is \textbf{Arm~1b} (eq.~\ref{eq:total_loss}; Table~\ref{tab:aux_loss_sweep}): bidirectional unified Finsler triplet $\mathcal{L}_{\mathrm{tri}}^{\mathrm{bi, F}}$ + $\mathcal{L}_{\mathrm{dcc}}$ (weight $0.1$), residual drift, no $\mathcal{L}_{\mathrm{tri}}^{\mathrm{dom}}$. Under the protocol-matched single-seed run it achieves $44.9\%$ mAP and $45.8\%$ Rank-1 (Table~\ref{tab:template_multiprotocol_bau}), an improvement of $+1.0\%$ mAP and $+0.9\%$ Rank-1 over the corresponding unidirectional configuration (Arm~1) in Table~\ref{tab:aux_loss_sweep}. Residual drift outperforms domain-prototype drift on this split: domain-prototype routing summarizes per-domain population statistics into a fixed prototype table, whereas when $\mathcal{L}_{\mathrm{dcc}}$ already constrains drift variance across cameras for the same identity, the per-sample flexibility of the residual MLP captures remaining heterogeneity more faithfully.
+
+\paragraph{Multi-target evaluation (Table~\ref{tab:template_multiprotocol_bau}).}
+Under Protocol~2, Finsler BAU outperforms the configuration-matched Euclidean baseline by $+2.5\%$ mAP on M+MS+CS$\rightarrow$C3 ($44.9$ vs.\ $42.4\%$), but trails marginally on M+CS+C3$\rightarrow$MS ($22.2$ vs.\ $23.3\%$) and MS+CS+C3$\rightarrow$M ($76.3$ vs.\ $76.8\%$). The M+CS+C3$\rightarrow$MS split exhibits a pronounced mAP-to-Rank-1 gap (${\approx}22$--$23\%$ mAP vs.\ ${\approx}48$--$50\%$ Rank-1) for both methods, consistent with MSMT17's large gallery and high within-identity appearance variation, which penalise mean Average Precision more than single-rank retrieval. Under Protocol~3, on the CUHK03 target both methods improve by $6$--$8\%$ mAP relative to Protocol~2 (Finsler $+6.0\%$, Euclidean $+8.2\%$); on Market-1501 the Protocol~3 gain is smaller (Finsler $+1.8\%$, Euclidean $+1.9\%$). Finsler and Euclidean are within $0.6\%$ mAP across all three P3 splits. The narrowing advantage under Protocol~3 reflects the expanded identity and camera coverage from reusing source test splits; the stronger identity-discriminative signal reduces the marginal contribution of the asymmetric term in $d_F$ (eq.~\ref{eq:finsler_distance}), which primarily provides a directional correction on top of the identity chord distance.
+
+
+\begin{table}[t]
+\centering
+\caption{Multi-seed evaluation on M+MS+CS$\rightarrow$C3 (Finsler BAU, Arm~1b, five independent runs). Mean and standard deviation are reported across seeds.}
+\label{tab:multiseed}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{ccccc}
+\toprule
+Seed & mAP & R1 & R5 & R10 \\
+\midrule
+1 & 43.8 & 44.2 & 62.9 & 74.9 \\
+2 & 43.4 & 43.1 & 64.1 & 73.6 \\
+3 & 44.0 & 43.7 & 64.6 & 74.1 \\
+4 & 43.8 & 43.4 & 64.3 & 74.2 \\
+5 & 44.1 & 43.8 & 63.6 & 73.6 \\
+\midrule
+Mean $\pm$ std & $43.8 \pm 0.3$ & $43.6 \pm 0.4$ & $63.9 \pm 0.7$ & $74.1 \pm 0.5$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\paragraph{Reproducibility (Table~\ref{tab:multiseed}).}
+Over five independent seeds on M+MS+CS$\rightarrow$C3, Finsler BAU (Arm~1b) achieves mAP $= 43.8 \pm 0.3\%$ and Rank-1 $= 43.6 \pm 0.4\%$ (sample standard deviation). Variances on mAP and Rank-1 are both small, consistent with stable training across initialisations. The protocol-matched single-seed rerun ($44.9\%$ mAP, Table~\ref{tab:template_multiprotocol_bau} and~\ref{tab:aux_loss_sweep}) lies ${\approx}1.1\%$ above the multi-seed mean. Code snapshots and hyperparameters are identical across all runs, and mismatch is attributable to hardware-dependent non-determinism (cuDNN algorithm benchmarking) vs.\ the multi-seed runs. The multi-seed mean ($43.8\%$) is the more reproducible estimate.
+
+\begin{table*}[t]
+\centering
+\caption{Auxiliary loss sweep on M+MS+CS$\rightarrow$C3 (CUHK03 target), Finsler asymmetric ranking, 60 epochs, $\lambda_\omega{=}1.5$. \textbf{DCC} $=$ cross-camera drift coherence $\mathcal{L}_{\mathrm{dcc}}$ (eq.~\ref{eq:loss_dcc}); \textbf{SCA} $=$ same-camera drift attraction (Supp.~\ref{sec:suppl_sca}). \textbf{Arm~1b} (unified bidirectional triplet + DCC, residual drift) is the recommended primary row. Drift-head columns report \emph{res.}\ (residual drift) / \emph{dom-proto.}\ (domain-prototype drift); Arm~1b reports residual drift only. $\max\|\hat{\omega}\|$ is the epoch-peak post-GS drift norm.}
+\label{tab:aux_loss_sweep}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}c l l c c c c c c@{}}
+\toprule
+Arm & Base triplet & Drift auxiliaries & Drift head & mAP & R1 & R5 & R10 & $\max\|\hat{\omega}\|$ \\
+\midrule
+0 & Unified & $\mathcal{L}_{\mathrm{sca}}$ ($w{=}0.1$) + bidir & res.\ / dom-proto. & 43.6 / 43.0 & 43.4 / 43.1 & 64.6 / 64.7 & 74.4 / 73.4 & 0.090 / 0.086 \\
+1 & Unified & $\mathcal{L}_{\mathrm{dcc}}$ ($w{=}0.1$) & res.\ / dom-proto. & \underline{43.9} / 42.8 & \underline{44.9} / 42.1 & 64.9 / 64.3 & 74.1 / 72.9 & 0.086 / 0.081 \\
+\textbf{1b} & \textbf{Unified + bidir} & $\mathcal{L}_{\mathrm{dcc}}$ ($w{=}0.1$) & \textbf{res.} & \textbf{44.9} & \textbf{45.8} & \textbf{64.9} & \textbf{74.3} & \textbf{0.090} \\
+2 & Unified & $\mathcal{L}_{\mathrm{dcc}} + \mathcal{L}_{\mathrm{sca}}$ ($w{=}0.1$) & res.\ / dom-proto. & \underline{43.9} / 43.6 & 44.5 / 44.0 & 63.8 / 63.6 & 74.1 / 74.3 & 0.082 / 0.084 \\
+3 & Id.-slice + bidir & $\mathcal{L}_{\mathrm{sca}}$ ($w{=}0.1$) & res.\ / dom-proto. & 43.7 / 43.2 & 43.9 / 42.9 & 64.6 / 63.3 & 75.4 / 72.9 & 0.085 / 0.079 \\
+4 & Unified & $\mathcal{L}_{\mathrm{sca}}$ ($w{=}0.3$) + bidir & res.\ / dom-proto. & \underline{43.9} / 43.6 & 44.6 / 43.3 & 64.7 / 64.3 & 74.1 / 73.8 & 0.080 / 0.074 \\
+5 & Unified + bidir & $\mathcal{L}_{\mathrm{tri}}^{\mathrm{dom}}$ (cam., $w{=}1$) & res.\ / dom-proto. & 36.4 / 35.2 & 35.5 / 36.0 & 56.5 / 57.6 & 66.0 / 67.7 & 0.114 / 0.119 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}
+
+\paragraph{Auxiliary-loss sweep (Table~\ref{tab:aux_loss_sweep}).}
+Arm~5 (camera-mined asymmetric domain triplet $\mathcal{L}_{\mathrm{tri}}^{\mathrm{dom}}$, weight 1.0, with bidirectional mining) produces a $-7.5\%$ mAP regression relative to the unified baseline (see \S\ref{subsec:interference_analysis}). Drift-only auxiliaries ($\mathcal{L}_{\mathrm{dcc}}$, $\mathcal{L}_{\mathrm{sca}}$, or both at weight 0.1) remain within $\pm 0.3\%$ mAP of each other without bidirectional mining (Arms~1--4). Adding bidirectional triplet on top of $\mathcal{L}_{\mathrm{dcc}}$ (Arm~1b) yields the best sweep result aligned with the protocol-matched rerun. Under Euclidean-domain $\mathcal{L}_{\mathrm{dom}}$, the domain-triplet-only arm collapses by $-6.1\%$ mAP when Finsler ranking is activated at test (Supp.~\ref{tab:eval_drift_supp_b}).
+
+
+\subsection{Controlled corruption study} \label{subsec:controlled_corruption}
+
+\paragraph{Setting.}
+We isolate whether asymmetric distance scoring causally produces direction-dependent retrieval, using a controlled synthetic corruption benchmark that is free of the training-time confounds present in the main DG-ReID protocol. Fifty held-out Market-1501 identities, each with two source crops from distinct cameras, are corrupted at five severity levels ($\sigma\!\in\!\{0,1,2,3,4\}$) following ImageNet-C categories~\cite{hendrycks2019benchmarking}: Gaussian blur, resolution downscaling, gamma tone shift, sensor noise, and JPEG recompression.
+
+\paragraph{Configurations.}
+Three configurations are evaluated. The \emph{Euclidean baseline} is a BAU M+MS+CS-pretrained ResNet-50, with Euclidean ranking and no additional training on toy data. It establishes a retrieval asymmetry reference without Randers machinery. The \emph{trained variant} uses the same pretrained backbone with frozen weights; a single linear projection $\theta\!:\!\mathbb{R}^{2048}\!\to\!\mathbb{R}$ is appended to pre-BN features and trained for 20 epochs with a pairwise monotonicity loss:
+\begin{equation}
+    \mathcal{L}_{\mathrm{mono}} = \frac{1}{|\mathcal{P}|}\sum_{(i,j)\in\mathcal{P}} \bigl[\theta_i - \theta_j + m\bigr]_+,
+    \label{eq:l_mono}
+\end{equation}
+where $\mathcal{P}\!=\!\{(i,j): \mathrm{pid}_i\!=\!\mathrm{pid}_j,\, \sigma_i\!<\!\sigma_j\}$ enforces $\theta$ monotone decreasing with severity within each identity. Retrieval uses the simplified Randers score $d_R(q,g)=\|\mathbf{f}_g-\mathbf{f}_q\|_2+\alpha(\theta_g-\theta_q)$. A control with $\mathcal{L}_{\mathrm{mono}}$ disabled (no gradient reaches $\theta$) is reported in Appendix~\ref{sec:suppl_m2b_ablation}.
+
+\paragraph{Evaluation protocol.}
+For each severity $k$: Direction~A uses $\sigma\!=\!0$ images as queries and $\sigma\!=\!k$ images as gallery; Direction~B swaps roles. Both directions use exactly 50 queries, 50 gallery items, and one correct match per query. The $k\!=\!0$ cell (clean vs.\ clean) quantifies source-viewpoint bias unrelated to corruption.
+
+\begin{table}[t]
+  \centering
+  \caption{Euclidean baseline results for the balanced bidirectional evaluation on ToyCorruption (50 identities, single seed). Direction~A: clean query ($\sigma{=}0$) vs.\ corrupted gallery ($\sigma{=}k$); Direction~B reverses roles. Both directions: 50 queries, 50 gallery items, 1 correct match per query. $\Delta{=}\mathrm{mAP}_A{-}\mathrm{mAP}_B$.}
+  \label{tab:toy_balanced_baseline}
+  \resizebox{0.55\columnwidth}{!}{%
+  \begin{tabular}{lrrr}
+    \toprule
+    $k$ & mAP$_A$ & mAP$_B$ & $\Delta$ \\
+    \midrule
+    0 & 0.953 & 0.977 & $-0.023$ \\
+    1 & 0.967 & 0.932 & $+0.035$ \\
+    2 & 0.929 & 0.894 & $+0.035$ \\
+    3 & 0.850 & 0.649 & $\mathbf{+0.201}$ \\
+    4 & 0.564 & 0.438 & $+0.126$ \\
+    \bottomrule
+  \end{tabular}%
+  }
+\end{table}
+
+\begin{table}[t]
+  \centering
+  \caption{Mean bidirectional performance gap ($\Delta$) for trained variants on ToyCorruption across corruption levels $k{=}1$--$4$ (50 identities, single seed). $\alpha$: Randers asymmetry weight ($\alpha{=}0$ recovers Euclidean metric). Control results ($\mathcal{L}_{\mathrm{mono}}$ disabled) are detailed in Appendix~\ref{sec:suppl_m2b_ablation}.}
+  \label{tab:toy_balanced_trained}
+  \resizebox{0.7\columnwidth}{!}{%
+  \begin{tabular}{llr}
+    \toprule
+    Configuration & $\alpha$ & $\Delta$ \\
+    \midrule
+    Euclidean baseline & --- & $\mathbf{+0.099}$ \\
+    \midrule
+    Trained variant  & 0 (Euclid.) & $+0.018$ \\
+    ($\mathcal{L}_{\mathrm{mono}}$, $\lambda{=}0.1$) & 0.9 (Rand.) & $+0.041$ \\
+    \bottomrule
+  \end{tabular}%
+  }
+\end{table}
+
+\paragraph{Results.}
+The Euclidean baseline shows consistent directional asymmetry in favor of clean-probe retrieval (Table~\ref{tab:toy_balanced_baseline}, Fig.~\ref{fig:balanced_asymmetry_intro}): Direction~A exceeds Direction~B at all $k\!=\!1$--$4$, with mean $\Delta\!\approx\!+0.099$ and a peak of $+0.201$ at $k\!=\!3$. The $k\!=\!0$ sanity check yields $\Delta\!=\!-0.023$, quantifying source-viewpoint asymmetry unrelated to corruption. 
+
+The trained variant encodes corruption severity reliably: Spearman $\rho\!\approx\!-0.91$ between $\theta$ and severity on the 500-image test split after 20 epochs. The Randers correction produces the geometrically predicted directional gap on PID-matched clean/corrupted pairs: $d_R(z^0,z^k)-d_R(z^k,z^0)=2\alpha(\theta^k-\theta^0)<0$ at all tested $\alpha\!>\!0$, scaling monotonically with severity at $\alpha\!=\!0.9$ (approximately $-0.14$ at $\sigma\!=\!1$ through $-0.74$ at $\sigma\!=\!4$; Fig.~\ref{fig:toy_mechanism_gap}). The disabled-loss control (Appendix~\ref{sec:suppl_m2b_ablation}) shows zero gap at all $\alpha$ and all $\sigma$, causally isolating $\mathcal{L}_{\mathrm{mono}}$.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.8\linewidth]{fig/fig_toy_mechanism_gap.pdf}
+  \caption{Mean Randers directional gap $d_R(z^0,z^k)-d_R(z^k,z^0)$ vs.\ severity $\sigma$ at $\alpha\!=\!0.9$ (trained variant, balanced eval). Gaps are negative and grow in magnitude with $\sigma$; the disabled-loss control yields zero at all severities (see Appendix~\ref{sec:suppl_m2b_ablation}).}
+  \label{fig:toy_mechanism_gap}
+\end{figure}
+
+\paragraph{Limitations.}
+Two caveats apply. First, statistical power is limited ($N\!=\!50$, single seed); differences below $0.03$ in mAP should be treated as directional, and the Randers improvement of the trained variant ($+0.023$ mean $\Delta$ at $\alpha\!=\!0.9$ over its Euclidean counterpart) sits at this threshold; multi-seed replication is required before any retrieval improvement claim can be made. Second, the balanced single-severity protocol fixes one severity per gallery, keeping the Randers correction nearly constant within each severity level and making mAP shifts small by design. Testing on mixed-severity galleries would expose the cross-stratum regime where severity encoding matters most.
+

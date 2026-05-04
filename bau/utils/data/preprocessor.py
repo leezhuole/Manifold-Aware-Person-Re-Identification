@@ -42,6 +42,33 @@ class Preprocessor(Dataset):
         return img, fname, pid, cid
 
 
+class SeverityPreprocessor(Preprocessor):
+    """Preprocessor for 4-tuple toy train rows ``(path, pid, camid, severity)``.
+
+    Returns ``(img_tensor, fname, pid, camid, severity)`` so the training loop can
+    feed ``MonotonicityLoss`` and severity-stratified batches.
+    """
+
+    def _get_single_item(self, index):
+        items = self.dataset[index]
+        if len(items) < 4:
+            raise ValueError(
+                "SeverityPreprocessor expects 4-tuples (path, pid, camid, severity); "
+                "got length {}".format(len(items))
+            )
+        fname, pid, cid, severity = items[0], items[1], items[2], items[3]
+        fpath = fname
+        if self.root is not None:
+            fpath = osp.join(self.root, fname)
+
+        img = Image.open(fpath).convert('RGB')
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        return img, fname, pid, cid, int(severity)
+
+
 class TwoViewPreprocessor(Dataset):
     def __init__(self, dataset, root=None, transform_w=None, transform_s=None, transform=None):
         super(TwoViewPreprocessor, self).__init__()

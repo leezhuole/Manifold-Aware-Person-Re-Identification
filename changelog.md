@@ -1,5 +1,396 @@
 # Changelog
 
+**Timestamp:** 2026-05-04 22:00:00 UTC
+
+## [2026-05-04] - Toy figure script: y-axis label for intro delta PDF
+
+### Motivation
+The `fig_balanced_asymmetry_intro_delta.pdf` y-label used TeX `Dir.\` (abbreviation dot escape), which rendered a visible backslash in the PDF for some users.
+
+### Files changed
+- **Modified** `scripts/make_toy_corruption_paper_figures.py`: `make_intro_delta_bars_pdf` — `set_ylabel` now uses `Dir. A` / `Dir. B` without `\.` after `Dir`.
+
+### Expected behaviour
+Regenerating `fig_balanced_asymmetry_intro_delta.pdf` shows “Dir.” without a stray backslash.
+
+---
+
+**Timestamp:** 2026-05-03 17:40:00 UTC+2
+
+## [2026-05-03] - Paper draft: integrate toy experiment into all sections
+
+### Motivation
+Section 4.4 previously compared two independently trained checkpoints (Euclidean BAU vs. Finsler Arm 1b) on a confounded single-direction retrieval task. Three new controlled experiments (Euclidean baseline, trained variant with pairwise monotonicity loss, disabled-loss control) replace this with a clean mechanistic study using the balanced bidirectional protocol from `eval_toy_balanced.py`.
+
+### Files changed
+- **Modified** `paper/main.bib`: Added `chen2022benchmarks` entry (Chen et al., arXiv:2206.02416, *Benchmarks for Corruption Invariant Person Re-identification*).
+- **Modified** `paper/0_abstract.tex`: Compressed existing sentences (removed explicit disentanglement motivating sentence; condensed results line; removed "explicitly" and redundant phrases) and added two sentences about the toy experiment (pairwise monotonicity loss, ρ≈−0.91, balanced bidirectional eval direction confirmed) while staying within word budget.
+- **Modified** `paper/1_intro.tex`: Replaced Figure 1 (fig:drift_monotonicity, weak 1.4% drift signal) with two-panel figure using `fig_balanced_asymmetry_intro_strip.pdf` and `fig_balanced_asymmetry_intro_delta.pdf` (label: fig:balanced_asymmetry_intro). Added contribution (vi) about controlled synthetic validation of the severity-encoding mechanism and balanced bidirectional evaluation.
+- **Modified** `paper/2_relatedwork.tex`: Added two sentences at end of Section 2.4 citing Chen et al. (arXiv:2206.02416) with specific Rank-1 numbers (30.5% corrupted query vs. 77.2% corrupted gallery on Market-1501 ResNet-50) and connecting to the balanced evaluation in §4.4.
+- **Modified** `paper/4_experimentalResults.tex`: Complete rewrite of Section 4.4. Replaced confounded checkpoint comparison with three-configuration controlled study (Euclidean baseline, trained variant with L_mono, disabled-loss control in appendix). New structure: setting paragraph, configurations paragraph (with L_mono equation), balanced-protocol paragraph, Table 5 (8 rows: Euclidean baseline per severity + trained variant mean rows), results paragraphs, Randers gap figure (fig_toy_mechanism_gap.pdf), merged limitations+future-work paragraph. Removed all references to fig:drift_monotonicity, fig:toy_hook, Arm 1b comparison, and confounded Finsler vs. Euclidean mAP numbers.
+- **Modified** `paper/X_suppl.tex`: Added new appendix section "Monotonicity-loss ablation: λ=0 control" (label: sec:suppl_m2b_ablation) with full disabled-loss results table, confirming zero Randers gap and identical mAP across all α when L_mono is disabled.
+- **Modified** `paper/5_discussion.tex`: Added clarifying parenthetical after ρ=0.67 distinguishing Arm 1b drift magnitude from toy scalar θ (ρ≈−0.91, different architecture). Added new closing paragraph connecting L_mono (toy) and L_dcc (full system) as parallel strategies for making the drift subspace semantically structured.
+- **Modified** `paper/6_conclusion.tex`: Replaced the "near-zero test-time gains" sentence with accurate characterization of four controlled-study findings: L_mono causal isolation, Randers gap confirmed, directional mAP asymmetry positive at matched counts, toy mAP deltas small (N=50, single seed).
+
+### Constraints applied
+- No arbitrary experiment names (M1/M2a/M2b/D8) in main paper prose; descriptive text used throughout.
+- No em-dashes for rhetorical emphasis; semicolons and new sentences used instead.
+- No notation (L_mono, d_R, θ, α) used before definition in each section.
+- M2b (disabled-loss control) placed in appendix only; referenced from main text.
+- Table 5 concise (8 rows, no M2b rows in main table).
+- Limitations merged with future work into one paragraph (≤2 sentences per limitation).
+- BN norm suppression mentioned as a caveat only, not a prominent design point.
+- Abstract trimmed by ~22 words while adding ~57 words for toy experiment content (net reduction from ~210 to ~188 words).
+
+### Expected behaviour
+Paper accurately represents: (1) pairwise monotonicity loss causally encodes severity (ρ≈−0.91); (2) Randers gap confirmed geometrically on PID-matched balanced pairs; (3) directional mAP asymmetry positive at matched counts (mean Δ≈+0.099 at k=1..4); (4) toy Randers mAP deltas remain small (N=50, single seed caveat). No section claims Finsler outperforms Euclidean on the same checkpoint in the toy setting. No sentence conflates Arm 1b drift magnitude (ρ=0.67) with toy L_mono scalar (ρ≈−0.91).
+
+---
+
+**Timestamp:** 2026-05-04 20:45:00 UTC
+
+## [2026-05-04] - PLAN + figure script: balanced-only toy numbers (20260503 logs)
+
+### Motivation
+New balanced eval logs (`eval_toy_balanced_best_20260503_171229.log`, `…_m2a_…171300.log`, `…_m2b_…171319.log`) supply Randers gap (D8) per severity on PID-matched cross-source pairs. Paper plan and figure tooling should align with that single protocol and avoid framing a second “mixed” eval as co-primary.
+
+### Files changed
+- **Modified** `paper/PLAN.md`: triaging table and §4.4 prose use only balanced `eval_toy_balanced` metrics; updated M1 intro bar targets, M2a Spearman (−0.9114), M2a α=0.9 gap curve (−0.142…−0.735), M2b zero gaps, limitations/conclusion templates; removed mixed-eval narrative.
+- **Modified** `scripts/make_toy_corruption_paper_figures.py`: `fig_toy_mechanism_gap.pdf` is parsed from **balanced** M2a logs (`D8 mean_gap` per severity block); default `--mechanism-eval-log` picks newest `m2a_lambda0.1` balanced log; removed checkpoint-log path.
+- **Modified** `examples/eval_toy_balanced.py` module docstring: dropped pointer to `eval_toy_checkpoint.py` for “canonical” numbers.
+
+### Expected behaviour
+`python scripts/make_toy_corruption_paper_figures.py sec44-mechanism` writes the gap PDF from balanced M2a logs without `eval_toy_checkpoint*.log`.
+
+---
+
+**Timestamp:** 2026-05-04 18:30:00 UTC
+
+## [2026-05-04] - D8 / Randers gap pairs: relax same-camera requirement
+
+### Motivation
+`_collect_d8_pairs` required matching `(pid, cam)`, which excluded all balanced-protocol rows (clean on source 1 vs corrupted on source 2). The directional gap \(d_R(z^0,z^k)-d_R(z^k,z^0)\) is still well-defined for **same PID, severity 0 vs k** when endpoints lie on different cameras; only the camera filter was relaxed.
+
+### Files changed
+- **Modified** `bau/evaluators.py`: `_collect_d8_pairs` now matches on `pid` and filename-derived severity only; `compute_mean_asymmetric_gap_d8` docstring updated.
+- **Modified** `examples/eval_toy_balanced.py`: replaced “D8 is NaN” banner with PID-matched cross-camera note; Randers log lines now append `| D8 …` via local `_fmt_d8` (same shape as `eval_toy_checkpoint.py`).
+- **Modified** `tests/test_evaluators_bidirectional.py`: `TestD8MeanAsymmetricGap` docstring; new `test_cross_camera_same_pid_pairs`.
+- **Modified** `scripts/make_toy_corruption_paper_figures.py`: docstring no longer claims balanced eval cannot define the gap statistic.
+- **Modified** `paper/PLAN.md`: removed “Randers gap undefined in balanced eval” claims; aligned Table 5 caption, summary table row, and Critical Caveats #3 with PID-matched cross-source gap logging.
+
+### Expected behaviour
+Balanced eval runs report finite `d8_mean_asymmetric_gap` when θ is present and filenames parse; mixed `eval_toy_checkpoint` behaviour unchanged aside from possibly larger `n_pairs` if multiple corrupted cams per PID per k exist.
+
+---
+
+**Timestamp:** 2026-05-04 12:00:00 UTC
+
+## [2026-05-04] - `make_toy_corruption_paper_figures.py`: one PDF per panel; drop unused §4.4 extras
+
+### Motivation
+Paper build requires **separate PDFs** per image (no combined multi-panel PDFs). Intro Δ chart needed tighter y-margins and a single bar color (severity k is already on the x-axis). Mechanism gap panel should not advertise “mixed eval” in the axis title or carry a useless legend. Balanced-mean and training-curve PDFs are not used in the paper.
+
+### Files changed
+- **Modified** `scripts/make_toy_corruption_paper_figures.py`: `intro` writes `fig_balanced_asymmetry_intro_strip.pdf` + `fig_balanced_asymmetry_intro_delta.pdf`; `sec44-mechanism` writes `fig_toy_mechanism_strip.pdf` + `fig_toy_mechanism_gap.pdf`. Removed generators for `fig_toy_sec44_balanced_mean_delta.pdf` and `fig_toy_sec44_lmono_training.pdf` and related log-parsing helpers.
+- **Modified** `paper/PLAN.md`: “New figure source files” list updated to the four individual PDF names.
+
+### Expected behaviour
+`python scripts/make_toy_corruption_paper_figures.py all` emits four PDFs under `--out-dir`; LaTeX places strip + chart side-by-side as needed.
+
+---
+
+**Timestamp:** 2026-05-04 00:15:00 UTC
+
+## [2026-05-04] - Toy paper figures: rename + Section 4.4 outputs (mechanism, balanced summary, training)
+
+### Motivation
+`paper/PLAN.md` §4.4 adds/replaces figures beyond the intro hook: `fig:toy_mechanism` (strip + Randers gap vs σ from mixed eval), a compact view of balanced mean Δ across M1/M2a/M2b, and training-curve diagnostics (Spearman ρ and θ_std) for the M2a vs M2b ablation. A single script with a clearer name reduces fragmentation.
+
+### Files changed
+- **Removed** `scripts/make_fig_balanced_asymmetry_intro.py` (superseded).
+- **Added** `scripts/make_toy_corruption_paper_figures.py` *(superseded layout 2026-05-04 12:00 UTC entry above: individual PDFs; removed balanced-mean + training targets)*: sub-targets `intro`, `sec44-mechanism`, `sec44-balanced-mean`, `sec44-training`, or `all`. Writes under `--out-dir` (default `paper/`): `fig_balanced_asymmetry_intro.pdf`, `fig_toy_mechanism.pdf`, `fig_toy_sec44_balanced_mean_delta.pdf`, `fig_toy_sec44_lmono_training.pdf`. Auto-discovers logs under `--log-dir`; `sec44-mechanism` reads `eval_toy_checkpoint*.log` for M2a (Randers gap / logged `by_severity` — mixed protocol only, per PLAN). Balanced-only targets continue to use `eval_toy_balanced*.log`.
+
+### Expected behaviour
+`python scripts/make_toy_corruption_paper_figures.py all` from repo root regenerates intro + §4.4 figure PDFs when `logs/toy_lmono` contains the expected eval and train logs.
+
+---
+
+**Timestamp:** 2026-05-03 23:30:00 UTC
+
+## [2026-05-03] - Script: two-panel `fig:balanced_asymmetry_intro` from balanced eval logs
+
+### Motivation
+`paper/PLAN.md` §2 replaces Figure 1 with a two-panel figure: ToyCorruption severity strip plus M1 balanced-eval Euclidean Δ mAP bars. Values must come only from `eval_toy_balanced` logs (not mixed-protocol `eval_toy_checkpoint`).
+
+### Files changed
+- **Added** `scripts/make_fig_balanced_asymmetry_intro.py` *(superseded 2026-05-04 by `scripts/make_toy_corruption_paper_figures.py`)*: discovers `eval_toy_balanced*.log` under `--log-dir`, auto-selects M1 via `'no_theta': True` in the logged `args=` line, parses the first `Euclidean: ... Δ=` line per severity block for k=0..4, loads the same five `bounding_box_test` crops as `toy_paper_figures.make_corruption_strip`, writes a single PDF (`--output`, default `paper/fig_balanced_asymmetry_intro.pdf`). Optional `--eval-log` forces a specific balanced log (e.g. M2a/M2b).
+
+### Expected behaviour
+From repo root, `python scripts/make_fig_balanced_asymmetry_intro.py` with `logs/toy_lmono` present reproduces PLAN §2 bar heights (Euclidean Δ) and produces the intro hook PDF without reading mixed-severity eval logs.
+
+---
+
+**Timestamp:** 2026-05-03 22:05:00 UTC
+
+## [2026-05-03] - `PLAN.md`: replace alphanumeric label "D8" with "Randers gap"
+
+### Motivation
+The internal diagnostic label "D8" was leaking into paper-facing prose, disrupting reading flow and carrying no semantic content for a reader unfamiliar with the internal diagnostic numbering scheme. The concept — the signed difference d_R(z^0, z^k) − d_R(z^k, z^0) = 2α(θ^k − θ^0) — is now referred to uniformly as the "Randers gap" throughout PLAN.md.
+
+### Files changed
+- **Modified** `paper/PLAN.md`: replaced all 18 occurrences of "D8" with contextually appropriate phrases using "Randers gap." No numerical values or formulas were changed.
+
+### Expected behavior
+No alphanumeric diagnostic labels appear in the paper-facing narrative sections of PLAN.md. Practitioners reading Section 4.4 will encounter "Randers gap" on first use with its defining formula, and consistently thereafter.
+
+---
+
+**Timestamp:** 2026-05-03 21:55:00 UTC
+
+## [2026-05-03] - `PLAN.md`: triage balanced-only reporting + Limitations + Future Work
+
+### Motivation
+The balanced per-severity evaluation and mixed-severity evaluation produce conflicting Δ signs (M1: +0.099 balanced vs −0.055 mixed) driven by a gallery-size confound. Reporting both in the same table is misleading. This entry documents the decision to report only the balanced evaluation in Section 4.4, adds the Benchmarks for Corruption Invariant Person Re-identification citation as motivation, and adds condensed Limitations and Future Work sections derived from `changelogs/toy_lmono_diagnostic_analysis.md` §6–7.
+
+### Files changed
+- **Modified** `paper/PLAN.md`:
+  - Section 3 (Related Work): added Chen et al. arXiv:2206.02416 citation with specific Rank-1 numbers from Table 2 (30.5% corrupted query vs 77.2% corrupted gallery for ResNet-50) to justify direction-controlled evaluation.
+  - Section 5 (Section 4.4): added **Triaging decision** preamble explaining the protocol choice with three-point rationale.
+  - Para 2: replaced dual-protocol description with single balanced-protocol description; D8 moved to in-text supporting note.
+  - Para 5: replaced mixed-eval Randers mAP analysis with brief geometric confirmation note (D8 in-text only).
+  - Table 5: replaced mixed+balanced combined table with balanced-only 9-row table (M1 per k=0..4, M2b mean, M2a Euclidean and Randers α=0.9).
+  - **Para 6 (new)**: condensed Limitations from §6 of `toy_lmono_diagnostic_analysis.md` — N=50 single seed, BN drift, scalar θ ceiling, θ leakage.
+  - **Para 7 (new)**: condensed Future Work from §7 — multi-seed validation, BN drift control, low-dim drift head, real quality proxies (BRIAR).
+  - Critical Caveats: updated to reflect balanced-only reporting and BN drift as the primary confound.
+  - Verification: added items 11 (no mixed+balanced row mixing) and 12 (Chen et al. Rank-1 numbers in Section 2.4).
+  - Narrative Corrections: added row documenting that the mixed-protocol Δ=−0.055 must not appear in the paper.
+
+### Expected behavior
+Section 4.4 as planned presents a clean, single-protocol story: M1 establishes content-level asymmetry (Δ=+0.099, +0.201 at k=3), M2b ablation confirms L_mono causal, M2a BN drift explains signal reduction, and D8 geometric confirmation is in-text only. Limitations and future work are explicit and honest.
+
+---
+
+**Timestamp:** 2026-05-03 20:10:00 UTC
+
+## [2026-05-03] - `PLAN.md`: agent handoff for toy setting
+
+### Motivation
+Follow-on agents need a single place in `PLAN.md` for operational decisions (shell layout, D8 logging location, Spearman sign, M1 vs M2a BN comparability, `toy_resnet50` pointer) beyond the feature-level changelog entry.
+
+### Files changed
+- **Modified** `PLAN.md` — expanded **Critical Files** table (`train.sh`, `eval.sh`, toy eval/train scripts, `bau/evaluators.py`); new section **Agent handoff — operational decisions** with cross-reference to `changelog.md`.
+
+### Expected behavior
+Anyone continuing toy work reads `PLAN.md` end for protocol + file map; `changelog.md` remains the timestamped audit trail.
+
+---
+
+**Timestamp:** 2026-05-03 18:45:00 UTC
+
+## [2026-05-03] - Toy eval: `eval.sh`, `examples/eval_toy_checkpoint.py`, PLAN Spearman sign
+
+### Motivation
+Post-training toy metrics (bidirectional mAP, Spearman, **D8** `mean_gap`) were only visible inside `train_toy_lmono` logs; D8 was not printed. A reproducible eval entrypoint and shell wrapper were needed alongside `train.sh`.
+
+### Files changed
+- **Added** `examples/eval_toy_checkpoint.py` — load `train_toy_lmono.py` `.pth` (`model` state), `ToyCorruption`, `bidirectional_evaluate` with `return_theta=True`; log Spearman, Euclidean/Randers mAP per α, and **D8** per α; stdout tee like `eval_toy_m1.py`.
+- **Added** `eval.sh` — same env defaults as `train.sh` (`CKPT`, `DATA_DIR`, `LOG_DIR`, `OUT_DIR`); runs `eval_toy_m1.py` then `eval_toy_checkpoint.py` for `m2a_lambda0.1_seed1.pth` and `m2b_lambda0_seed1.pth` if present.
+- **Modified** `PLAN.md` — Spearman success criteria use **ρ(θ, severity) ≤ −0.8** (consistent with `MonotonicityLoss` and severity index 0=clean); M2b ablation wording; table footnote on M2a Euclidean vs M1.
+
+### Expected behavior
+`./eval.sh` writes new logs under `logs/toy_lmono/` without retraining; Randers lines include `D8 mean_gap=… n_pairs=… by_severity={…}`.
+
+---
+
+**Timestamp:** 2026-05-03 12:00:00 UTC
+
+## [2026-05-03] - PLAN D8: mean asymmetric Randers gap in `bau/evaluators.py`
+
+### Motivation
+`PLAN.md` diagnostic **D8** requires mean of \(d_R(z^0,z^k) - d_R(z^k,z^0)\) over severity \(k=1..4\) on matched clean↔corrupted embeddings (same PID and cam). This was not computed alongside bidirectional mAP.
+
+### Files changed
+- **Modified** `bau/evaluators.py` — added `_collect_d8_pairs`, `_scalar_randers_pair`, `compute_mean_asymmetric_gap_d8`; each `bidirectional_evaluate` Randers block now includes `d8_mean_asymmetric_gap` (`mean_gap`, `mean_gap_by_severity`, pair counts).
+- **Modified** `tests/test_evaluators_bidirectional.py` — assert `d8_mean_asymmetric_gap` present; `TestD8MeanAsymmetricGap` (analytic θ-only gap, θ=`None` → zero gap).
+
+### Expected behavior
+Toy runs calling `bidirectional_evaluate` get per-α D8 stats from the same extracted features as mAP; empty pairings (non–toy-style filenames in clean/gallery lists) yield NaN means and `n_pairs=0`.
+
+---
+
+**Timestamp:** 2026-05-02 23:30:00 UTC
+
+## [2026-05-02] - Toy runs: fix apparent hang, M1 logs, faster feature extract
+
+### Motivation
+`train.sh` appeared to stall after torchvision warnings: `train_toy_lmono` used `pretrained=True` (can block on ImageNet download with no progress), `extract_features` always slept 2s, and `eval_toy_m1` wrote no log files. `pairwise_distance` used deprecated `addmm_` overload.
+
+### Files changed
+- **Added** `bau/utils/stdout_tee.py` — shared `StdoutTee`; **modified** `examples/train_toy_lmono.py` to import it, **`pretrained=False`** when constructing the model (checkpoint supplies weights).
+- **Modified** `bau/evaluators.py` — `extract_features(..., pre_extract_sleep=0.0)` (optional sleep); `pairwise_distance` uses `addmm_(x, y.t(), beta=1.0, alpha=-2.0)`.
+- **Modified** `examples/train_bau.py` — memory-bank init passes `pre_extract_sleep=2.0` to preserve prior GPU settle behavior.
+- **Modified** `examples/eval_toy_m1.py` — stdout tee + `--log-dir` / `--log-file`, **`--workers` default 0** (was 4).
+- **Modified** `examples/train_toy_lmono.py` — **`--workers` default 0** (was 4).
+- **Modified** `train.sh` — `LOG_DIR`, passes `--log-dir` to M1 and M2 commands.
+
+### Expected behavior
+Toy scripts start without waiting on ImageNet download; logs appear under `logs/toy_lmono` from the start of M1; first eval has no fixed 2s sleep unless callers opt in.
+
+---
+
+**Timestamp:** 2026-05-02 22:00:00 UTC
+
+## [2026-05-02] - `train_toy_lmono.py`: tee stdout to log file
+
+### Motivation
+Toy training progress was only visible in the terminal; a durable log file supports `tail -f` and post-hoc review without changing evaluator internals.
+
+### Files changed
+- **Modified** `examples/train_toy_lmono.py` — `StdoutTee` mirrors `sys.stdout` to a line-buffered log file; `--log-dir` (default `logs/toy_lmono`) and `--log-file` (optional explicit path); header logs UTC time, `argv`, and resolved args; `print` to `stderr` once with the log path before tee; `finally` restores stdout and closes the file.
+
+### Expected behavior
+Every `print` during training and eval (including `bau/evaluators.py` feature extraction) is appended to the log while still appearing on the console.
+
+---
+
+**Timestamp:** 2026-05-02 21:15:00 UTC
+
+## [2026-05-02] - PLAN M1/M2a/M2b: `train.sh` + `examples/eval_toy_m1.py`
+
+### Motivation
+`PLAN.md` defines three toy runs: **M1** (Euclidean zero-shot, no θ / no train), **M2a** (`λ_mono>0`), **M2b** (`λ_mono=0`). `train_toy_lmono.py` only covers M2a/M2b; M1 needs plain `resnet50` eval-only.
+
+### Files changed
+- **Added** `examples/eval_toy_m1.py` — load `resnet50` without θ, frozen eval, `bidirectional_evaluate(..., return_theta=False)` over `ToyCorruption`.
+- **Added** `train.sh` — `CKPT_DIR` defaulting to `archive/logs/AGReIDv2_sweep/job_1502418_dt_cuhk03_EucBaseline`, guards if `best.pth` missing, runs M1 then M2a/M2b via `conda run -n BAU python`.
+
+### Expected behavior
+With `best.pth` present at `$CKPT`, `./train.sh` runs all three; otherwise the script exits with a message to set `CKPT` or restore weights from the job’s original `logs_dir` (see that job’s `log.txt`).
+
+---
+
+**Timestamp:** 2026-05-02 20:30:00 UTC
+
+## [2026-05-02] - PLAN Step 7: `examples/train_toy_lmono.py` + Step 8 `SeverityPreprocessor`
+
+### Motivation
+`PLAN.md` Step 7 needs a GPU training entrypoint for ToyCorruption (frozen backbone, `theta_head` + `toy_classifier`, `L_CE + λ L_mono`, severity-stratified sampling, bidirectional Randers eval, Spearman ρ). Step 8’s `SeverityPreprocessor` was required so train batches expose severity to the loss.
+
+### Files changed
+- **Added** `examples/train_toy_lmono.py` — CLI, `ToyCorruption` + `toy_resnet50`, checkpoint load via `copy_state_dict`, Adam on trainable heads only, `SeverityStratifiedSampler` + `SeverityPreprocessor`, epoch logs (`zero_pair_frac`, `theta_std`), `bidirectional_evaluate` + Spearman, optional `--save-path`.
+- **Modified** `bau/utils/data/preprocessor.py` — `SeverityPreprocessor` (4-tuple → 5 return values).
+- **Modified** `bau/models/__init__.py` — `toy_resnet50` factory.
+- **Modified** `bau/loss/mono.py` / `bau/loss/__init__.py` — `count_monotonicity_pairs` for batch diagnostics.
+- **Modified** `bau/evaluators.py` — `toy_severity_from_reid_fname` pattern `_c\d+s(\d+)_`; `bidirectional_evaluate` returns `theta_by_fname` when `return_theta=True`; `spearman_rho_theta_severity`; path key resolution (with Step 6 batching fixes retained).
+- **Modified** `bau/utils/randers.py` — squared L2 identity term (α=0 matches `pairwise_distance`).
+- **Added** `tests/test_toy_lmono_train.py`; **modified** `tests/test_randers_distance.py` (scalar-α expected value for squared L2).
+
+### Expected behavior
+`conda run -n BAU python examples/train_toy_lmono.py --data-dir .../ToyCorruption --checkpoint .../best.pth` trains on CUDA; eval reports Euclidean + per-α Randers mAP and Spearman ρ(θ, severity).
+
+### How to run tests
+`conda run -n BAU python -m unittest discover -s tests -p 'test_*.py' -v`
+
+---
+
+**Timestamp:** 2026-05-02 (UTC evening) — PLAN Step 6 evaluation extensions
+
+## [2026-05-02] - PLAN Step 6: `extract_features` θ + `bidirectional_evaluate`
+
+### Motivation
+Toy L_mono / Randers diagnostics need batched θ extraction alongside identity features, bidirectional clean↔corrupted mAP/CMC over Randers distance (aligned with squared L2 in `bau/utils/randers.py`), and path-key resolution consistent with training loaders.
+
+### Files changed
+- **Modified** `bau/evaluators.py` — `extract_cnn_feature(..., return_theta=False)` uses model device (no hardcoded CUDA); `extract_features(..., return_theta=False)` optionally returns `(features, labels, theta_dict)`; 5-tuple batches supported for `SeverityPreprocessor`; `pairwise_distance` resolves query/gallery paths via `_resolve_feature_key`; helpers `_stack_identity_features`, `_stack_theta_for_items`, `_ranking_metrics`; `bidirectional_evaluate(...)` runs Euclidean + per-α Randers for directions A/B and reports `delta_mAP`, attaches `theta_by_fname` when `return_theta=True`.
+- **Modified** `tests/test_randers_distance.py` — tests match current squared-L2 + θ Randers implementation (no private `_euclidean_sq_matrix` import).
+- **Added** `tests/test_evaluators_bidirectional.py` — θ extraction, Randers α=0 vs `pairwise_distance`, `bidirectional_evaluate` structure, flat-θ invariance across α.
+
+### Expected behavior
+`bidirectional_evaluate` with `return_theta=True` and α including `0.0` reproduces Euclidean mAP for that α when θ is unused or zero; Spearman helpers (`toy_severity_from_reid_fname`, `spearman_rho_theta_severity`) unchanged. Full suite: `conda run -n BAU python -m unittest discover -s tests -p 'test_*.py' -v`.
+
+---
+
+**Timestamp:** 2026-05-02 19:51:45 UTC
+
+## [2026-05-02] - PLAN Step 2: `SeverityStratifiedSampler`
+
+### Motivation
+`PLAN.md` Step 2 requires P×K identity sampling where each PID block of `num_instances` spans at least two severity values (from `data_source[i][3]`) so `L_mono` sees within-batch same-PID severity pairs.
+
+### Files changed
+- **Modified** `bau/utils/data/sampler.py` — added `SeverityStratifiedSampler`: same shuffle-and-consecutive chunking schedule as `RandomIdentitySampler`, `pid_severity_index` (`pid → {severity → [indices]}`) at init, post-partition swap repair across chunks when a chunk is single-severity, within-chunk shuffles via a dedicated `Random` instance so the global RNG matches `RandomIdentitySampler` when `random` is reset at the start of `__iter__`.
+- **Added** `tests/test_severity_stratified_sampler.py` — length parity with `RandomIdentitySampler` (explicit re-seed per iterator), per-batch ≥2 severities / K=2 pair diversity, 3-tuple fallback, `pid_severity_index` smoke test.
+
+### Expected behavior
+Training loaders that pass 4-tuples `(path, pid, camid, severity)` can use `SeverityStratifiedSampler` with the same `batch_size` / `num_instances` as `RandomIdentitySampler` for the same epoch length when `random.seed(...)` is applied immediately before each `__iter__`; each emitted K-block for a PID contains at least two distinct severity labels whenever that PID’s image pool allows it.
+
+### How to run tests
+`conda run -n BAU python -m unittest discover -s tests -p 'test_*.py' -v`
+
+---
+
+**Timestamp:** 2026-05-02 (PLAN Step 3 — θ head)
+
+## [2026-05-02] - PLAN Step 3: optional θ head on ``resnet50`` (2049-d eval contract)
+
+### Motivation
+Toy Randers / L_mono training needs a scalar θ from pre-BN GeM features, frozen backbone + trainable θ only, and a clear split for asymmetric distance: first 2048 = L2-normalized BN neck, last 1 = θ.
+
+### Files changed
+- **Modified** `bau/models/model.py` — `resnet50(..., with_theta_head=False)`: optional `theta_head = Linear(2048, 1, bias=False)` with small normal init; forward uses `theta = theta_head(emb)` from pre-BN `emb`; train returns `(emb, f_norm, theta)` (no legacy logits); eval returns `(f_norm, theta)`; added `freeze_pretrained()` freezing `base`, `pool`, `bn_neck`, `classifier` when present.
+- **Added** `tests/test_resnet50_theta_head.py` — shapes, BN-bypass gradient check, `freeze_pretrained`, init scale, branch independence vs baseline `f_norm`.
+
+### Expected behavior
+Default `with_theta_head=False` matches prior `(emb, f_norm, logits)` / eval `f_norm` contract. `create("resnet50", ..., with_theta_head=True)` is valid. Evaluators that assume a single tensor still require Step-6-style handling for the θ tuple.
+
+### How to run tests
+`conda run -n BAU python -m unittest tests.test_resnet50_theta_head -v`
+
+---
+
+**Timestamp:** 2026-05-02 (PLAN Step 4 — L_mono)
+
+## [2026-05-02] - PLAN Step 4: `MonotonicityLoss` (L_mono) + tests
+
+### Motivation
+`PLAN.md` Step 4 requires a batch-wise monotonicity hinge so training can enforce higher scalar ``theta`` for lower corruption severity within each identity.
+
+### Files changed
+- **Added** `bau/loss/mono.py` — `MonotonicityLoss(margin=0.1)`; `forward(theta, pids, severities)` averages ``relu(margin - (theta[i] - theta[j]))`` over ordered pairs with the same PID and ``severity[i] < severity[j]``; returns a zero loss tied to ``theta`` when no pairs exist.
+- **Modified** `bau/loss/__init__.py` — export `MonotonicityLoss`.
+- **Added** `tests/test_mono_loss.py` — `unittest` coverage (zero loss when ordering is satisfied, positive when reversed, empty-pair guard, margin edge, gradients, shape / validation).
+
+### Note on the displayed formula in `PLAN.md`
+The plan line ``[theta_i - theta_j + margin]_+`` for ``sev_i < sev_j`` would assign large loss when ``theta_i >> theta_j`` (the desired case). The implementation matches the plan’s text (“lower severity → higher ``theta``”) and the verification checklist via ``[margin - (theta_i - theta_j)]_+``.
+
+### Expected behavior
+Training can combine this module with CE; batches without same-PID severity pairs contribute zero to L_mono without breaking the autograd graph when ``theta`` requires grad.
+
+### How to run tests
+`conda run -n BAU python -m unittest tests.test_mono_loss -v`
+
+---
+
+**Timestamp:** 2026-05-02 (ToyCorruption loader)
+
+## [2026-05-02] - PLAN Step 1: `ToyCorruption` dataset + factory + tests
+
+### Motivation
+`PLAN.md` Step 1 requires a metadata-driven loader for the v4 toy corruption tree so later steps (sampler, training, Randers eval) can consume train 4-tuples and eval query/gallery splits.
+
+### Files changed
+- **Added** `bau/datasets/toy_corruption.py` — `ToyCorruption` parses `metadata.json` once, builds `train` (4-tuple with 0-indexed PID), `query_s1` / `query_s2` / `gallery` (3-tuples), assigns filesystem paths under `bounding_box_train/`, `query_s1/`, `query_s2/`, `gallery/`, exposes `num_train_pids` / `num_train_imgs`.
+- **Modified** `bau/datasets/__init__.py` — register factory name `toy_corruption` for `create("toy_corruption", root)`.
+- **Added** `tests/test_toy_corruption.py` — `unittest` coverage (minimal synthetic tree + consistency checks against repo `examples/data/ToyCorruption/metadata.json` when present).
+
+### Expected behavior
+`create("toy_corruption", root)` loads without error when `root/metadata.json` exists and optional image subtrees match the generator layout; eval rows route to `query_s1` / `query_s2` / `gallery` using severity 0 + `source_idx` as in `scripts/generate_toy_dataset.py`.
+
+### How to run tests
+Requires PyTorch (BAU env): `conda run -n BAU python -m unittest discover -s tests -p 'test_*.py' -v`
+
+---
+
 **Timestamp:** 2026-05-02
 
 ## [2026-05-02] - Strip `bau/` back to upstream BAU; archive custom extensions

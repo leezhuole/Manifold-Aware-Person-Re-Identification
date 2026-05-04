@@ -1,0 +1,127 @@
+\section{Methodology} \label{sec:methodology}
+We augment BAU-style alignment-uniformity training~\cite{cho2024generalizable} with asymmetric retrieval geometry. This section defines the core representation and scoring function (\S\ref{subsec:structured_embedding}--\ref{subsec:asymmetric_finsler_distance}), the two drift-head designs compared throughout (\S\ref{subsec:drift_head_design}), the training objective and its primary recipe (\S\ref{subsec:training_objective}), drift regularization including the primary auxiliary loss (\S\ref{subsec:drift_regularization}), domain-space losses (\S\ref{subsec:domain_losses}), and the objective interference analysis that motivates the primary recipe (\S\ref{subsec:interference_analysis}).
+
+\subsection{Structured embedding} \label{subsec:structured_embedding}
+The backbone produces $\mathbf{z}=[\mathbf{z}^{\mathrm{id}};\mathbf{z}^{\omega}]$: an identity component $\mathbf{z}^{\mathrm{id}}\in\mathbb{R}^{d_{\mathrm{id}}}$ and a drift component $\mathbf{z}^{\omega}\in\mathbb{R}^{d_\omega}$ encoding camera/domain shift, with $d=d_{\mathrm{id}}+d_\omega$. A Gram-Schmidt step removes the identity-parallel component of the drift: $\hat{\mathbf{z}}^{\omega}=\mathbf{z}^{\omega}-(\mathbf{z}^{\omega}\cdot\hat{\mathbf{z}}^{\mathrm{id}})\hat{\mathbf{z}}^{\mathrm{id}}$, where $\hat{\mathbf{z}}^{\mathrm{id}}$ is the $\ell_2$-normalized identity feature. Without this projection, drift collinear with identity ($\mathbf{z}^{\omega}\approx\beta\hat{\mathbf{z}}^{\mathrm{id}}$) reduces the asymmetry term in \eqref{eq:finsler_distance} to a scaled Euclidean distance, losing directional expressiveness. This mirrors the shared-private decomposition of~\cite{bousmalis2016domain}; it is an inductive bias, not a guarantee of statistical independence (see Supp.~\ref{sec:suppl_orthogonal_rationale}).
+
+\paragraph{Geometric properties of the drift factor.} The sigmoid-gated scaling in Sec.~\ref{subsec:drift_head_design} ensures $\|\tilde{\mathbf{z}}^{\omega}\|_2 < c_{\max} = 0.95$ before orthogonalization. Since the Gram-Schmidt step cannot increase the norm, the post-projection drift lies in the open ball $\hat{\mathbf{z}}^{\omega} \in B^{d_\omega}(\mathbf{0},\, c_{\max})$, satisfying the Randers positivity condition $\|\omega\| < 1$ required in Sec.~\ref{subsec:asymmetric_finsler_distance}. Despite geometric confinement, identity and drift are not statistically independent: the Jacobian $\partial\hat{\mathbf{z}}^{\omega}/\partial\hat{\mathbf{z}}^{\mathrm{id}} \neq \mathbf{0}$ in general, since the projector $\Pi_{\hat{\mathbf{z}}^{\mathrm{id}}}^{\perp}$ depends on $\hat{\mathbf{z}}^{\mathrm{id}}$, and both factors derive from the same backbone output $\mathbf{h}$. Two concrete channels for residual identity leakage are: gradient coupling via the backbone, and finite-capacity drift in the orthogonal complement (analyzed in Supp.~\ref{sec:suppl_orthogonal_rationale}).
+
+\subsection{Randers-type asymmetric distance} \label{subsec:asymmetric_finsler_distance}
+\paragraph{Euclidean baseline.}
+Standard ReID pipelines construct a symmetric metric space via batch-hard triplet loss~\cite{hermans2017defense}; we retain this formulation as the controlled ablation reference. Let $f_\theta : \mathcal{X} \rightarrow \mathbb{R}^d$ map an image $\mathbf{x}_i$ to an $L_2$-normalized embedding $\mathbf{z}_i$:
+\begin{multline}
+\mathcal{L}_{tri} = \frac{1}{|\mathcal{B}|} \sum_{i \in \mathcal{B}} \Bigg[ \max_{p:y_p=y_i} d_E(\mathbf{z}_i, \mathbf{z}_p) \\
+- \min_{n:y_n \neq y_i} d_E(\mathbf{z}_i, \mathbf{z}_n) + m \Bigg]_+ \; ,
+\label{eq:euclidean_triplet}
+\end{multline}
+where $[\cdot]_+{=}\max(\cdot,0)$, $d_E(\mathbf{u}, \mathbf{v}) = \|\mathbf{u} - \mathbf{v}\|_2$, and $m{>}0$ is the margin. Setting $\hat{\mathbf{z}}^{\omega}{=}\mathbf{0}$ in the distance below recovers $d_E$ on the identity slice.
+
+\paragraph{Randers-type distance.}
+We replace the global drift in the canonical Randers form (eq.~\ref{eq:finsler_dist_canonical}) with the midpoint of the two endpoint drifts and restrict displacement to the identity subspace:
+\begin{equation}
+    d_F(\mathbf{x}, \mathbf{y}) = \|\mathbf{x}^{\mathrm{id}} - \mathbf{y}^{\mathrm{id}}\|_2 + \big\langle 1/2(\mathbf{x}^\omega + \mathbf{y}^\omega), \mathbf{y}^{\mathrm{id}} - \mathbf{x}^{\mathrm{id}} \big\rangle.
+    \label{eq:finsler_distance}
+\end{equation}
+The midpoint drift is a trapezoidal approximation to the path integral along the identity chord. Eq.~\eqref{eq:finsler_distance} borrows the closed-form asymmetric template of $d_{F^C}$ without claiming a globally valid Randers metric on feature space. When $d_\omega < d_{\mathrm{id}}$, the asymmetry term is geometrically suppressed by $\sqrt{d_\omega/d_{\mathrm{id}}}$; a correction $\gamma = d_{\mathrm{id}}/d_\omega$ restores approximate magnitude parity (derivation in Supp.~\ref{sec:suppl_drift_dim_scaling}).
+
+\paragraph{Randers positivity constraint.}
+Randers positive-definiteness requires $\|\mathbf{z}^{\omega}\|_2 < 1$ (the flat-space specialization of $\|\omega\|_{M^{-1}}<1$~\cite{bao2000introduction}). Violation permits $d_F < 0$ for displacements anti-aligned with $\omega$, producing non-physical negative scores that destabilize triplet mining. We enforce the constraint with sigmoid-gated norm scaling (Sec.~\ref{subsec:implementation_details}) and a log-barrier penalty (Sec.~\ref{subsec:drift_regularization}); see Supp.~\ref{sec:suppl_norm_constraints} for alternatives evaluated.
+
+\paragraph{Identity-only alignment.} The BAU alignment loss~\cite{cho2024generalizable} minimizes $\|f_s - f_w\|_2^2$ between augmented views. Aligning the full embedding forces $\omega_s\approx\omega_w$, collapsing drift to augmentation-invariant values and destroying the asymmetric signal that augmentations are meant to induce. We restrict alignment to the identity slice:
+\begin{equation}
+    \mathcal{L}_{\mathrm{align}} = \sum_{i \in \mathcal{B}} w_i \cdot \|\mathbf{z}^{\mathrm{id}}_{s,i} - \mathbf{z}^{\mathrm{id}}_{w,i}\|_2^2 \;,
+    \label{eq:identity_only_alignment}
+\end{equation}
+where $w_i$ are reciprocal $k$-NN Jaccard weights~\cite{zhong2017re,cho2024generalizable} computed on identity features only. The uniform loss is similarly restricted to $\mathbf{z}^{\mathrm{id}}$, preventing drift magnitude from biasing the repulsion kernel.
+
+\subsection{Drift-head design variants} \label{subsec:drift_head_design}
+We implement two alternative drift-head designs and evaluate both on the same experimental arms. Per-arm results are reported under two columns: \textbf{res.}\ (residual drift) and \textbf{dom-proto.}\ (domain-prototype drift).
+
+\paragraph{Residual drift.}
+A two-layer MLP (hidden dimension $d_{\mathrm{id}}/2 = 1024$ for $d_{\mathrm{id}}{=}2048$; no bias) maps pre-BN pooled backbone features directly to a $d_\omega$-dimensional drift vector. The output layer is initialized with $\mathcal{N}(0,10^{-3})$ weights so drift begins near zero. The MLP operates without domain labels or domain-routing signals, learning a free, per-sample directional correction that we call $\omega_{\mathrm{res}}(\mathbf{x})$.
+
+\paragraph{Domain-prototype drift.} \label{subsubsec:domain_prototype_drift}
+The domain-prototype head produces a drift vector as a convex combination of $S$ learnable domain-prototype embeddings weighted by soft domain probabilities, modulated by a sigmoid gate and augmented by a small residual MLP correction. Concretely, a linear classifier on a detached copy of the post-BN identity features produces domain logits over $S$ source domains. At training time the classifier is supervised via the auxiliary cross-entropy $\mathcal{L}_{\mathrm{dom\text{-}tok}}$ against the known source-domain label; the domain prior uses a one-hot selection so that ground-truth routing is used during optimization. At test time the soft-probability path activates: logits are converted via temperature-scaled softmax to domain probabilities $p_s(\mathbf{x})$, producing a convex combination of $S$ learnable prototype embeddings $\mathbf{e}_s\in\mathbb{R}^{d_e}$ ($d_e{=}64$). The weighted prototype is projected to drift space and modulated by a sigmoid gate, yielding $\omega_{\mathrm{dom}}(\mathbf{x})$. The stop-gradient isolates identity-backbone parameters from the domain-classifier cross-entropy signal, while the drift projection head receives gradients from both. The final drift combines the domain prior and the per-sample residual correction:
+\begin{equation}
+    \omega(\mathbf{x}) = \omega_{\mathrm{dom}}(\mathbf{x}) + \lambda\,\omega_{\mathrm{res}}(\mathbf{x}) \;, \quad \lambda = 0.1 \;,
+    \label{eq:domain_drift_decomposition}
+\end{equation}
+where $\omega_{\mathrm{res}}$ shares the same two-layer MLP architecture as the residual drift head. Full equations for $\omega_{\mathrm{dom}}$ appear in Supp.~\ref{sec:suppl_domain_proto_head}.
+
+\paragraph{Relationship between the two designs.}
+The residual drift variant is eq.~\eqref{eq:domain_drift_decomposition} with $\lambda{=}1$ and $\omega_{\mathrm{dom}}\equiv\mathbf{0}$: drift equals the unconstrained per-sample MLP output. The domain-prototype variant adds a structured domain prior and reduces the residual scale to $\lambda{=}0.1$. Both variants apply the same Gram-Schmidt orthogonalization (\S\ref{subsec:structured_embedding}) and sigmoid-gated norm scaling (\S\ref{subsec:implementation_details}) after the drift is computed. The sigmoid scaling asymptotically bounds the pre-orthogonalization drift norm below $c_{\max}{=}0.95$; the Gram-Schmidt step reduces the norm further but the post-orthogonalization bound is not explicitly re-enforced.
+
+\subsection{Training objective} \label{subsec:training_objective}
+\label{subsec:unified_vs_identity_sliced}\label{subsec:total_objective}% alias labels for backward compatibility
+
+\paragraph{Triplet mining modes.}
+\textbf{Unified Finsler triplet} applies the batch-hard hinge of eq.~\eqref{eq:euclidean_triplet} with $d_F$ on the full structured embedding $[\mathbf{z}^{\mathrm{id}};\hat{\mathbf{z}}^{\omega}]$, so triplet gradients shape both identity and drift factors jointly. \textbf{Identity-sliced triplet} applies the same hinge with $d_E$ on $\mathbf{z}^{\mathrm{id}}$ only; other BAU terms may still use the full embedding (e.g., $\mathcal{L}_{\mathrm{dom}}$ on $[\mathbf{z}^{\mathrm{id}};\hat{\mathbf{z}}^{\omega}]$). Unless noted, ``unified'' refers to the joint mining objective paired with identity-only alignment and uniformity on $\mathbf{z}^{\mathrm{id}}$ (Sec.~\ref{subsec:asymmetric_finsler_distance}).
+
+% \emph{Implementation note.} The \texttt{TripletLoss} module forces \texttt{symmetric\_trapezoidal} as the $d_F$ variant during training regardless of the \texttt{--drift-method} flag, which controls only evaluation; this training-evaluation mismatch is documented in Supp.~\ref{sec:suppl_drift_integration}.
+
+\paragraph{Bidirectional Finsler triplet.} 
+Under asymmetric $d_F$, $d_F(i,p)\neq d_F(p,i)$ in general, so mining over $D_{ij}=d_F(\mathbf{z}_i,\mathbf{z}_j)$ alone does not enforce margin separation in the reverse direction. Since query direction is unknown at test time, the primary recipe averages the forward and reverse losses:
+\begin{equation}
+    \mathcal{L}_{\mathrm{tri}}^{\mathrm{bi}} = \tfrac{1}{2}\bigl[\mathcal{L}_{\mathrm{tri}}(D) + \mathcal{L}_{\mathrm{tri}}(D^\top)\bigr] \;,
+    \label{eq:bidirectional_triplet}
+\end{equation}
+where $\mathcal{L}_{\mathrm{tri}}(D^\top)$ mines the hardest positives and negatives from the transposed distance matrix. In isolation, without $\mathcal{L}_{\mathrm{dcc}}$, bidirectional mining does not consistently improve results (Table~\ref{tab:aux_loss_sweep}, Arms~0, 3, 4); combined with $\mathcal{L}_{\mathrm{dcc}}$, it yields the strongest performance in the auxiliary-loss sweep (Sec.~\ref{subsec:quantitative_analysis}, Table~\ref{tab:aux_loss_sweep}).
+
+\paragraph{Total loss.}
+Let $\mathcal{L}_{\mathrm{tri}}^{\mathrm{F}}$ denote the (optionally bidirectional) Finsler triplet on the chosen embedding slice, $\mathcal{L}_{\mathrm{align}}$ the identity-only alignment~\eqref{eq:identity_only_alignment}, $\mathcal{L}_{\mathrm{uniform}}$ the BAU uniformity term on $\mathbf{z}^{\mathrm{id}}$, $\mathcal{L}_{\mathrm{dom}}$ the memory-bank domain repulsion~\eqref{eq:domain_loss}, $\mathcal{L}_\omega$ the average barrier penalty~\eqref{eq:omega_regularization} over weak/strong views. The composite loss is
+\begin{multline}
+    \mathcal{L} = \mathcal{L}_{\mathrm{ce}}
+    + \mathcal{L}_{\mathrm{tri}}^{\mathrm{F}}
+    + \mathcal{L}_{\mathrm{align}} \\
+    + \mathcal{L}_{\mathrm{uniform}}
+    + \mathcal{L}_{\mathrm{dom}} 
+    + \lambda_\omega\mathcal{L}_\omega
+    + \lambda_{\mathrm{dcc}} \mathcal{L}_{\mathrm{dcc}}
+    + \cdots \;,
+    \label{eq:total_loss}
+\end{multline}
+where omitted terms collect optional auxiliaries used only in specific ablations (Sec.~\ref{subsec:drift_regularization}) or the auxiliary cross-entropy on domain tokens $\mathcal{L}_{\mathrm{dom\text{-}tok}}$ in the domain-prototype drift setting (Sec.~\ref{subsubsec:domain_prototype_drift}). The primary recipe reported in Sec.~\ref{sec:experimentalResults} uses bidirectional unified $\mathcal{L}_{\mathrm{tri}}^{\mathrm{bi, F}}$ (eq.~\ref{eq:bidirectional_triplet}), $\lambda_{\mathrm{dcc}}{=}0.1$, residual drift, and $\lambda_\omega{=}1.5$.
+
+\subsection{Drift regularization} \label{subsec:drift_regularization}
+\label{subsec:drift_norm_regularization}\label{subsec:drift_aux_losses}% alias labels for backward compatibility
+
+\paragraph{Barrier penalty.}
+The positivity condition $\|\omega\|<c$ (Sec.~\ref{subsec:asymmetric_finsler_distance}) is enforced via a logarithmic barrier~\cite{boyd2004convex}:
+\begin{equation}
+    \mathcal{L}_\omega = -\frac{1}{|\mathcal{B}|}\sum_{i \in \mathcal{B}} \log\!\bigl(c - \|\omega_i\|_2 + \epsilon\bigr) \;,
+    \label{eq:omega_regularization}
+\end{equation}
+where $\epsilon > 0$ prevents numerical singularity. The gradient $\partial \mathcal{L}_\omega / \partial \|\omega\| = 1/(c - \|\omega\| + \epsilon)$ grows as the norm approaches the bound, providing an increasingly strong restorative signal, unlike hard clamping, which zeros the gradient for $\|\omega\| \geq c$.
+
+\paragraph{Cross-camera drift coherence $\mathcal{L}_{\mathrm{dcc}}$ (primary auxiliary).}
+We regularize the drift subspace by penalizing L2 dispersion across same-identity, different-camera pairs. Without this constraint, an unconstrained drift head tends to absorb camera-specific appearance variation: drift vectors for the same person seen from different cameras diverge, rendering the asymmetric term in $d_F$ incoherent across matching directions. $\mathcal{L}_{\mathrm{dcc}}$ acts as a \emph{drift variance regularizer}:
+\begin{equation}
+    \mathcal{L}_{\mathrm{dcc}} = \frac{1}{|\mathcal{C}_{\mathrm{dcc}}|}\sum_{(i,j)\in\mathcal{C}_{\mathrm{dcc}}} \|\omega_i - \omega_j\|_2^2 \;
+    \label{eq:loss_dcc}
+\end{equation}
+where $\mathcal{C}_{\mathrm{dcc}} = \{(i,j): y_i = y_j,\; c_i \neq c_j \}$ and $\omega_i$ denotes the post-orthogonalization drift vector for sample $i$. This prevents drift from becoming a camera-noise sink and ensures $\omega$ provides a small, consistent directional correction. The effect is not that drift semantically encodes person identity; it is that drift variance is bounded so that the asymmetric scoring term is reliable. Two interpretations are consistent with this: (i) drift as an identity-conditioned directional bias that should be view-invariant for a given person, and (ii) a soft regularizer that reduces the effective drift dimensionality required for stable Randers scoring.
+
+\paragraph{Same-camera drift attraction $\mathcal{L}_{\mathrm{sca}}$ (ablation only).}
+For ablation completeness we also test same-camera drift attraction, which encourages drift vectors within the same camera to align regardless of identity. Its equation and ablation results appear in Supp.~\ref{sec:suppl_sca}. 
+
+\subsection{Domain losses} \label{subsec:domain_losses}
+
+\paragraph{Asymmetric domain repulsion.}
+We substitute $d_F$ for the Euclidean distance in the BAU domain repulsion term~\cite{cho2024generalizable}, making the penalty direction-aware: cost depends on drift-vector orientation, not only Euclidean separation. Let $\mathbf{m}_k$ denote the centroid of domain $k$ in the memory bank:
+\begin{equation}
+    \mathcal{L}_{\mathrm{dom}} = \frac{1}{|\mathcal{B}|}\sum_{i \in \mathcal{B}} \phi\!\left(d_F^2(\mathbf{z}_i,\, \mathbf{m}_{c(i)})\right),
+    \label{eq:domain_loss}
+\end{equation}
+where $\phi(\cdot)$ is the BAU repulsion kernel~\cite{cho2024generalizable} and $c(i)$ is the domain label of sample $i$.
+
+\paragraph{Asymmetric domain triplet (ablation; see \S\ref{subsec:interference_analysis}).}
+A camera-mined batch-hard triplet on $d_F$ was evaluated as an explicit encoder of nuisance structure in the drift subspace:
+\begin{multline}
+    \mathcal{L}_{\mathrm{tri}}^{\mathrm{dom}} = \frac{1}{|\mathcal{B}|}\sum_{i\in\mathcal{B}}\bigl[\max_{p: c_p=c_i} d_F(\mathbf{z}_i,\mathbf{z}_p)
+    \\ - \min_{n: c_n\neq c_i} d_F(\mathbf{z}_i,\mathbf{z}_n) + m_{\mathrm{dom}}\bigr]_+ \;,
+    \label{eq:domain_triplet}
+\end{multline}
+where positives share a camera $c_i$ (rather than an identity $y_i$) and negatives are drawn from other cameras. This consistently produced large mAP regressions (\S\ref{subsec:interference_analysis}, Table~\ref{tab:aux_loss_sweep}, Arm~5); failure-mode analysis is in Supp.~\ref{sec:suppl_domain_triplet}.
+
+\subsection{Objective interference analysis} \label{subsec:interference_analysis}
+Under multi-source protocols~\cite{cho2024generalizable,zhao2021m3l}, jointly optimizing the camera-mined triplet $\mathcal{L}_{\mathrm{tri}}^{\mathrm{dom}}$ (eq.~\ref{eq:domain_triplet}) with the identity-mined unified loss $\mathcal{L}_{\mathrm{tri}}^{\mathrm{bi}}$ (eq.~\ref{eq:bidirectional_triplet}) yields $-7.5\%$ mAP regressions (Table~\ref{tab:aux_loss_sweep}, Arm~5). We call this \textbf{objective interference}: identity batch-hard mining rewards cross-camera same-PID proximity, whereas camera batch-hard mining rewards same-camera proximity (typically different identities), so the two hinges disagree on the full embedding and the drift subspace absorbs most of the slack ($\max\|\hat{\omega}\|$ rises from ${\approx}0.09$ under the primary recipe to ${\approx}0.11$--$0.12$ in Arm~5). Cross-camera drift coherence $\mathcal{L}_{\mathrm{dcc}}$ (eq.~\ref{eq:loss_dcc}) avoids camera-vs-identity hard-pair conflict by regularizing drift variance instead: the regime in which we prefer to operate when stability is paramount. Multi-term training precludes unique attribution; the empirical pattern is nonetheless consistent with this account.

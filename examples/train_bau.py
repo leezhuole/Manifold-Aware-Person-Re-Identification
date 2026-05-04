@@ -149,7 +149,9 @@ def main_worker(args):
     # memory bank with init
     memory_bank = MemoryBank(2048, num_classes).cuda()
 
-    features, _ = extract_features(model, memory_loader, print_freq=50)
+    features, _ = extract_features(
+        model, memory_loader, print_freq=50, pre_extract_sleep=2.0
+    )
     features_dict = collections.defaultdict(list)
     for f, pid, _, _ in sorted(train_dataset.train):
         features_dict[pid].append(features[f].unsqueeze(0))

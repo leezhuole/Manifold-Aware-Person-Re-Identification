@@ -13,6 +13,7 @@ from .grid import GRID
 from .ilids import iLIDS
 from .prid import PRID
 from .viper import VIPeR
+from .toy_corruption import ToyCorruption
 
 
 __factory = {
@@ -28,6 +29,7 @@ __factory = {
     'ilids': iLIDS,
     'prid': PRID,
     'viper': VIPeR,
+    'toy_corruption': ToyCorruption,
 }
 
 

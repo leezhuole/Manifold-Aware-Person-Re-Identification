@@ -12,10 +12,19 @@ from .mobilenetv2 import mobilenetv2_x1_4
 
 
 class resnet50(nn.Module):
-    def __init__(self, num_classes=0, pretrained=True):
+    """BAU ResNet-50 + GeM + BN neck.
+
+    With ``with_theta_head=True`` (toy L_mono / Randers): ``theta_head`` reads **pre-BN**
+    ``emb``; train returns ``(emb, f_norm, theta)``; eval returns ``(f_norm, theta)``.
+    Downstream Randers distance uses ``torch.cat([f_norm, theta], dim=1)`` ∈ ℝ^{2049}
+    (identity slice ‖·‖=1 on the first 2048 dims; θ is the last coordinate).
+    """
+
+    def __init__(self, num_classes=0, pretrained=True, with_theta_head=False):
         super(resnet50, self).__init__()
         self.num_classes = num_classes
-        
+        self.with_theta_head = with_theta_head
+
         # resnet50 backbone
         resnet = torchvision.models.resnet50(pretrained=pretrained)
 
@@ -41,16 +50,35 @@ class resnet50(nn.Module):
         if self.num_classes > 0:
                 self.classifier = nn.Linear(2048, self.num_classes, bias=False)
 
+        if self.with_theta_head:
+            self.theta_head = nn.Linear(2048, 1, bias=False)
+            init.normal_(self.theta_head.weight, mean=0.0, std=1e-4)
+
+    def freeze_pretrained(self):
+        """Freeze backbone, pool, BN neck, and legacy classifier; keep ``theta_head`` trainable."""
+        for m in (self.base, self.pool, self.bn_neck):
+            for p in m.parameters():
+                p.requires_grad_(False)
+        if self.num_classes > 0 and hasattr(self, "classifier"):
+            self.classifier.requires_grad_(False)
+
     def forward(self, x):
         x = self.base(x)
         emb = self.pool(x)
         emb = emb.view(x.size(0), -1)
+        if self.with_theta_head:
+            theta = self.theta_head(emb)
         f = self.bn_neck(emb)
+        f_norm = F.normalize(f)
+        if self.with_theta_head:
+            if self.training:
+                return emb, f_norm, theta
+            return f_norm, theta
         if self.training:
             logits = self.classifier(f)
-            return emb, F.normalize(f), logits
+            return emb, f_norm, logits
         else:
-            return F.normalize(f)
+            return f_norm
 
 
 class mobilenetv2(nn.Module):

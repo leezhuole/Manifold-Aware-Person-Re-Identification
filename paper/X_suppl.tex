@@ -1,0 +1,255 @@
+\clearpage
+\setcounter{page}{1}
+\maketitlesupplementary
+
+\section{Learnable Alpha Interpolation Path} \label{sec:suppl_alpha}
+This section documents the scalar-gate parameterization of the Randers asymmetric term—an intermediate design step that preceded and was subsequently superseded by the full split-embedding omega architecture described in Sec.~\ref{subsec:asymmetric_finsler_distance}.
+
+\subsection{Formulation} \label{subsec:suppl_alpha_formulation}
+Let $\mathbf{z} = [\mathbf{z}^{\mathrm{id}}; \mathbf{z}^{\omega}]$ be the split embedding from Sec.~\ref{subsec:asymmetric_finsler_distance}. The triplet distance under the canonical flat Randers template (cf.\ eq.~\ref{eq:finsler_norm}) decomposes as:
+\begin{equation}
+    d_F^\alpha(\mathbf{x}, \mathbf{y}) = \|\mathbf{x}^{\mathrm{id}} - \mathbf{y}^{\mathrm{id}}\|_2 + \alpha \cdot \left\langle \tfrac{1}{2}(\mathbf{x}^{\omega} + \mathbf{y}^{\omega}),\, \mathbf{y}^{\mathrm{id}} - \mathbf{x}^{\mathrm{id}} \right\rangle,
+    \label{eq:finsler_distance_alpha}
+\end{equation}
+where $\alpha \in [0, \alpha_{\max}]$ is a bounded learnable scalar that gates the asymmetric contribution. This is an instance of the canonical Randers form with a learned, globally uniform drift magnitude.
+
+The scalar $\alpha$ is parameterized via a temperature-scaled sigmoid to enforce the bound:
+\begin{equation}
+    \alpha = 2\alpha_{\max} \left|\sigma\!\left(\tfrac{r}{T}\right) - 0.5\right|,
+    \label{eq:finsler_distance_alpha_bound}
+\end{equation}
+with raw parameter $r$, temperature $T$, and maximum $\alpha_{\max}$. Setting $r{=}0$ initializes $\alpha{=}0$, recovering Euclidean batch-hard mining on the identity slice.
+
+\subsection{Relationship to the full omega architecture}
+The scalar-gate parameterization is an early-stage instantiation in which the full drift vector $\mathbf{z}^{\omega}$ contributes asymmetry modulated by a single global gate $\alpha$. This design was superseded by the split-embedding architecture introduced in Sec.~\ref{subsec:asymmetric_finsler_distance}, which treats $\mathbf{z}^{\omega}$ as a learned $d_\omega$-dimensional drift factor orthogonalized to the identity direction. In the current implementation, $\mathbf{z}^{\omega}$ alone defines the asymmetric cost in $d_F$; the scalar $\alpha$ gate is a legacy component no longer active in the training recipe.
+
+The design rationale for the transition: a scalar gate imposes a single global magnitude on asymmetry, preventing the network from learning heterogeneous, direction-specific drift contributions. The full omega subspace removes this bottleneck while retaining the $\mathbf{z}^{\omega}\to\mathbf{0}$ Euclidean limit via omega regularization.
+
+\subsection{Empirical behavior}
+Under the multi-source DG-ReID protocols used in this paper, $\alpha$ consistently pegged to $\alpha_{\max}$ across all runs. This behavior is consistent with the model exploiting the asymmetric term as a shortcut—assigning maximum directional cost from early epochs rather than learning calibrated directional costs data-adaptively. This instability motivated the transition to the full omega drift-vector architecture, in which omega regularization provides a principled constraint on drift magnitude.
+
+\subsection{Scope}
+The scalar-gate mechanism is a research stepping stone that clarified the design space and directly motivated the full omega architecture. It is documented here for reproducibility and to provide a complete account of the development trajectory. The main text focuses on the split-embedding architecture and the Randers-type distance $d_F$ (eq.~\ref{eq:finsler_distance}); the $\alpha$ gate is a superseded design variant disclosed here.
+
+\section{Alternative Drift Integration Methods} \label{sec:suppl_drift_integration}
+The symmetric trapezoidal approximation (eq.~\ref{eq:finsler_distance}) is the simplest closed-form integration of the drift field along the identity chord. We implemented and evaluated three alternatives that account for the curvature of the path on the unit sphere.
+
+\paragraph{Spherical trapezoidal.}
+When identity features are $\ell_2$-normalized, the straight-line chord in eq.~\eqref{eq:finsler_distance} does not lie on the unit sphere. The spherical trapezoidal variant replaces the Euclidean midpoint with the geodesic midpoint on $\mathbb{S}^{d-1}$. However, as the cosine similarity $C = \langle \hat{\mathbf{x}}^{\mathrm{id}}, \hat{\mathbf{y}}^{\mathrm{id}} \rangle \to 1$ (near-duplicate pairs), the geodesic arc length vanishes and the asymmetry term collapses regardless of drift magnitude, producing zero gradient for the drift branch on the most informative (hard positive) pairs.
+
+\paragraph{SLERP with midpoint Riemann sum.}
+Spherical linear interpolation (SLERP) traces the great-circle arc between $\hat{\mathbf{x}}^{\mathrm{id}}$ and $\hat{\mathbf{y}}^{\mathrm{id}}$. We discretize the path into $K{=}10$ steps and compute a midpoint Riemann sum of the drift--velocity inner product along the arc. The velocity at parameter $t$ involves coefficients $A_t = -\frac{\theta}{\sin\theta}\cos\bigl((1{-}t)\theta\bigr)$ and $B_t = \frac{\theta}{\sin\theta}\cos(t\theta)$, where $\theta = \arccos\langle \hat{\mathbf{x}}^{\mathrm{id}}, \hat{\mathbf{y}}^{\mathrm{id}} \rangle$.
+
+\paragraph{Analytical integration with parallel transport.}
+Under Levi-Civita parallel transport on $\mathbb{S}^{d-1}$, the drift field is transported along the geodesic and integrated analytically:
+\begin{equation}
+    \text{asymmetry}_{\mathrm{analytical}} = \tfrac{1}{2}\,\frac{\theta}{\sin\theta}\bigl(\langle \omega_x, \hat{\mathbf{y}}^{\mathrm{id}} \rangle - \langle \omega_y, \hat{\mathbf{x}}^{\mathrm{id}} \rangle\bigr) \;.
+    \label{eq:analytical_integration}
+\end{equation}
+
+\paragraph{Numerical stability.}
+Both SLERP and analytical methods require $\arccos$ and $\theta/\sin\theta$, which are numerically unstable near $\theta{=}0$ and $\theta{=}\pi$. We apply three stabilization techniques: (i) dynamic epsilon clamping based on datatype ($10^{-4}$ for \texttt{float16}, $10^{-6}$ for \texttt{float32}); (ii) bounded linear extrapolation for $\arccos$ near the boundary (following PyTorch3D); (iii) a fourth-order Taylor expansion $\theta/\sin\theta \approx 1 + \theta^2/6 + 7\theta^4/360$ for $|\theta| < 0.01$. All angular computations are locally promoted to \texttt{float32} to avoid mixed-precision underflow.
+
+\paragraph{Empirical outcome.}
+Despite these stabilizations, SLERP and analytical methods did not improve over the symmetric trapezoidal baseline on our evaluation protocol. The trapezoidal form was retained as the default for its simplicity and numerical robustness.
+
+\section{Drift Norm Constraint Alternatives} \label{sec:suppl_norm_constraints}
+We evaluated four strategies for enforcing $\|\omega\| < c$:
+
+\begin{enumerate}
+    \item \textbf{Hard clamping}: $\omega \leftarrow \omega \cdot \min(1, c/\|\omega\|)$. Discontinuous gradients at the boundary; the optimizer receives zero gradient when $\|\omega\| \leq c$, preventing fine-grained norm control.
+    \item \textbf{Soft tanh scaling}: $\omega \leftarrow \hat{\omega} \cdot c \cdot \tanh(\|\omega\|/c)$. Smooth but compresses the gradient for large norms, slowing convergence.
+    \item \textbf{Sigmoid gating} (adopted): $\omega \leftarrow \hat{\omega} \cdot c \cdot \sigma(\|\omega\|)$. Monotonic, smooth, and bounded by $c$. The sigmoid provides a natural soft saturation without gradient compression at small norms.
+    \item \textbf{LogSumExp}: $\omega \leftarrow \hat{\omega} \cdot (-\frac{1}{\beta})\log\bigl(e^{-\beta\|\omega\|} + e^{-\beta c}\bigr)$. Smooth approximation to $\min(\|\omega\|, c)$ controlled by sharpness $\beta$. More complex with no empirical advantage over sigmoid gating.
+\end{enumerate}
+
+Sigmoid gating was selected for its simplicity and stable training dynamics. The logarithmic barrier penalty (Sec.~\ref{subsec:drift_norm_regularization}) provides an additional soft constraint during optimization.
+
+\section{$k$-NN Weight Contamination and Uniform Loss Corrections} \label{sec:suppl_knn_uniform}
+\paragraph{$k$-NN Jaccard weights.}
+The BAU alignment loss~\cite{cho2024generalizable} weights each pair by reciprocal $k$-NN Jaccard similarity. When computed on the full $[\mathbf{z}^{\mathrm{id}} \mid \mathbf{z}^{\omega}]$ embedding, drift magnitude biases the cosine similarity used for neighbor retrieval: samples with large $\|\omega\|$ appear closer to each other regardless of identity, contaminating the Jaccard graph with drift-correlated edges. Restricting the $k$-NN computation to the identity slice $\mathbf{z}^{\mathrm{id}}$ eliminates this artifact.
+
+\paragraph{Uniform loss.}
+The BAU uniform loss penalizes $\log \mathbb{E}[\exp(-2\|f_i - f_j\|^2)]$ over all pairs. On the full embedding, drift magnitude inflates pairwise distances, artificially satisfying the uniformity objective without improving identity-space coverage. Restricting the uniform loss to $\mathbf{z}^{\mathrm{id}}$ and using symmetric Euclidean distance ensures that the repulsion kernel acts on identity discrimination, not drift magnitude.
+
+\section{InstanceNorm Ablation Design} \label{sec:suppl_in_ablation}
+Instance Normalization (IN) in early ResNet stages is a standard DG-ReID technique for suppressing domain-specific style statistics~\cite{pan2018two}. Our hypothesis is that the learned drift vector can subsume the role of IN by explicitly modeling domain shift in the embedding space. We implement configurable IN insertion at ResNet stages 1--4, enabling systematic ablation: removing IN while retaining the drift head tests whether the Finsler asymmetry captures the same domain-invariance signal that IN provides through feature normalization.
+
+\section{Orthogonal Decomposition Rationale} \label{sec:suppl_orthogonal_rationale}
+Without an explicit orthogonality constraint, the drift branch can learn to replicate the identity signal. If $\mathbf{z}^{\omega} \approx \beta\,\hat{\mathbf{z}}^{\mathrm{id}}$ for some scalar $\beta$, the asymmetry term in eq.~\eqref{eq:finsler_distance} reduces to $\beta\,\|\mathbf{x}^{\mathrm{id}}-\mathbf{y}^{\mathrm{id}}\|_2\cos\theta$ (where $\theta$ is the angle between the identity displacement and the identity direction), i.e.\ a scaled copy of the Euclidean distance---the model gains no directional expressiveness. The Gram--Schmidt projection $\hat{\mathbf{z}}^{\omega}=\mathbf{z}^{\omega}-(\mathbf{z}^{\omega}\cdot\hat{\mathbf{z}}^{\mathrm{id}})\hat{\mathbf{z}}^{\mathrm{id}}$ removes the identity-parallel component, forcing drift to encode information orthogonal to identity discrimination. This is an inductive bias analogous to the shared-private decomposition in domain separation networks~\cite{bousmalis2016domain}: the identity branch captures domain-invariant structure, while the drift branch is structurally confined to the complementary subspace. The projection does not guarantee statistical independence at finite model capacity.
+
+\section{Drift Dimension Scaling Derivation} \label{sec:suppl_drift_dim_scaling}
+When $d_\omega < d_{\mathrm{id}}$, the inner product in eq.~\eqref{eq:finsler_distance} operates on the first $d_\omega$ coordinates of the identity displacement. By the Cauchy--Schwarz inequality,
+\begin{equation}
+    \bigl|\langle \omega,\, \Delta \mathbf{x}^{\mathrm{id}}_{[1:d_\omega]} \rangle\bigr| \leq \|\omega\|_2 \cdot \|\Delta \mathbf{x}^{\mathrm{id}}_{[1:d_\omega]}\|_2 \;.
+    \label{eq:cauchy_schwarz_bound}
+\end{equation}
+For isotropic identity features, $\|\Delta \mathbf{x}^{\mathrm{id}}_{[1:d_\omega]}\|_2 \approx \sqrt{d_\omega / d_{\mathrm{id}}}\;\|\Delta \mathbf{x}^{\mathrm{id}}\|_2$, so the asymmetry term is suppressed by $\sqrt{d_\omega / d_{\mathrm{id}}}$ relative to the Euclidean base. A dimensionality correction $\gamma = d_{\mathrm{id}} / d_\omega$ restores approximate magnitude parity between the symmetric and asymmetric components under the isotropic assumption, mitigating the risk that drift contribution vanishes as a dimensional artifact when $d_\omega \ll d_{\mathrm{id}}$.
+
+\section{Cross-Framework Validation (ReNorm2 Port)} \label{sec:suppl_renorm2}
+To test whether the Finsler distance generalizes beyond the BAU training recipe, we ported the asymmetric scoring layer to the ReNorm2 framework with minimal modifications: the structured $[\mathbf{z}^{\mathrm{id}} \mid \mathbf{z}^{\omega}]$ embedding and $d_F$ were inserted as drop-in replacements for the Euclidean distance in the ReNorm2 retrieval path. This port yielded negative results---the asymmetric distance did not improve over the ReNorm2 Euclidean baseline---suggesting that the benefit of directional scoring may depend on the specific alignment--uniformity training dynamics of BAU rather than being a universal improvement.
+
+\section{Finsler ranking at test (eval-drift diagnostics)} \label{sec:suppl_eval_drift_tables}
+Table~\ref{tab:ablation_main} in the main text reports metrics under identity-slice Euclidean evaluation for historical loss-structure arms. The following tables re-evaluate the same checkpoints with Finsler ranking at test ($d_F$ on $[\mathbf{z}^{\mathrm{id}};\mathbf{z}^{\omega}]$) versus Euclidean ranking on the identity slice, holding all representation weights fixed; $\Delta$ is the per-metric difference (Finsler minus Euclidean). Table~\ref{tab:eval_drift_supp_a} uses Finsler-domain $\mathcal{L}_{\mathrm{dom}}$ training; Table~\ref{tab:eval_drift_supp_b} is the Euclidean-domain $\mathcal{L}_{\mathrm{dom}}$ diagnostic (drift suppression).
+
+% ============================================================
+% Supplementary Table A — eval-drift delta, Finsler-domain training
+% ============================================================
+% Source: results/eval_drift_true_finsler_ranking_table.md, Table A
+% Slurm log: logs/slurm_logs/eval-drift-true-seq-1518384.out (28 checkpoints)
+% Eucl. eval column = --eval-drift false metrics from training sweep
+% Finsler eval column = examples/test.py --eval-drift true on same best.pth
+% Delta = Finsler eval - Eucl. eval (same checkpoint; only ranking distance changes)
+
+\begin{table*}[t]
+\centering
+\caption{%
+  Effect of Finsler ranking at test (M+MS+CS$\rightarrow$C3,
+  Finsler-domain $\mathcal{L}_\mathrm{dom}$, best drift-head variant per arm):
+  $\Delta \approx 0$ across all arms indicates that switching from Euclidean to
+  Finsler ranking on the same checkpoint does not measurably change mAP or
+  Rank-1; the sole exception---\emph{domain triplet only} under Euclidean-domain training
+  ($\Delta\mathrm{mAP} = -6.1$, Table~B)---reveals that
+  $\mathcal{L}_\mathrm{dom}^\mathrm{Eucl}$ suppresses the drift vector,
+  breaking Finsler ranking at test.
+}
+\label{tab:eval_drift_supp_a}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}lc*{6}{c}@{}}
+\toprule
+\multirow{2}{*}{Arm} & \multirow{2}{*}{\shortstack{Best\\variant}} &
+  \multicolumn{3}{c}{mAP (\%)} &
+  \multicolumn{3}{c}{Rank-1 (\%)} \\
+\cmidrule(lr){3-5} \cmidrule(lr){6-8}
+ & & Eucl.\ eval & Finsler eval & $\Delta$mAP &
+     Eucl.\ eval & Finsler eval & $\Delta$R1 \\
+\midrule
+Identity-sliced triplet                            & res. & 44.1 & 44.1 & {$+$0.0} & 43.6 & 43.6 & {$+$0.0} % Provenance: train job 1516935, eval job 1518384
+\\
+Domain triplet only                                  & res. & 35.1 & 35.1 & {$+$0.0} & 33.9 & 33.9 & {$+$0.0} % Provenance: train job 1516604, eval job 1518384
+\\
+Id.-slice + domain triplet                                  & res. & 36.4 & 36.5 & {$+$0.1} & 36.2 & 36.3 & {$+$0.1} % Provenance: train job 1516935, eval job 1518384
+\\
+Id.-slice + dom.\ triplet (no $\mathcal{L}_\mathrm{dom}$) & res. & 34.6 & 34.6 & {$+$0.0} & 36.4 & 36.6 & {$+$0.2} % Provenance: train job 1516935, eval job 1518384
+\\
+Id.-slice + cam.\ xDom contrast.                          & res. & 43.1 & 43.2 & {$+$0.1} & 43.7 & 43.6 & {$-$0.1} % Provenance: train job 1516935, eval job 1518384
+\\
+\textbf{Id.-slice + $\mathcal{L}_{\mathrm{dcc}}$}                         & dom-proto.  & \textbf{43.8} & \textbf{43.8} & \textbf{$+$0.0} & \textbf{44.9} & \textbf{45.0} & \textbf{$+$0.1} % Provenance: train job 1516935, eval job 1518384
+\\
+\textbf{Unified Finsler}                 & res. & \textbf{44.1} & \textbf{44.1} & \textbf{$+$0.0} & \textbf{44.0} & \textbf{44.1} & \textbf{$+$0.1} % Provenance: train job 1516604, eval job 1518384
+\\
+\bottomrule
+\end{tabular}%
+}
+%TODO: author confirms \textbf{} method row before submission
+\end{table*}
+
+
+% ============================================================
+% Supplementary Table B — eval-drift delta, Euclidean-domain training
+% (diagnostic; included to expose drift suppression under ED L_domain)
+% ============================================================
+% Source: results/eval_drift_true_finsler_ranking_table.md, Table B
+% Key diagnostic: domain triplet only (ED training) DeltamAP = -6.1, DeltaR1 = -2.9
+% Interpretation: Euclidean domain loss suppresses drift vector -> Finsler ranking breaks.
+
+\begin{table*}[t]
+\centering
+\caption{%
+  Diagnostic: same eval-drift comparison as Table~A but with
+  Euclidean-domain $\mathcal{L}_\mathrm{dom}$ (\texttt{--use-euclidean-domain-loss},
+  M+MS+CS$\rightarrow$C3):
+  \emph{domain triplet only} collapses from 30.6\% to 24.5\% mAP when Finsler ranking is activated
+  ($\Delta\mathrm{mAP} = -6.1$), confirming that Euclidean domain training
+  suppresses the drift vector and is incompatible with Finsler-distance evaluation.
+}
+\label{tab:eval_drift_supp_b}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}lc*{6}{c}@{}}
+\toprule
+\multirow{2}{*}{Arm} & \multirow{2}{*}{\shortstack{Best\\variant}} &
+  \multicolumn{3}{c}{mAP (\%)} &
+  \multicolumn{3}{c}{Rank-1 (\%)} \\
+\cmidrule(lr){3-5} \cmidrule(lr){6-8}
+ & & Eucl.\ eval & Finsler eval & $\Delta$mAP &
+     Eucl.\ eval & Finsler eval & $\Delta$R1 \\
+\midrule
+Identity-sliced triplet                            & res. & 43.9 & 43.9 & {$+$0.0} & 43.9 & 43.9 & {$+$0.0} % Provenance: train job 1517230, eval job 1518384
+\\
+\textbf{Domain triplet only}                         & res. & \textbf{30.6} & \textbf{24.5} & \textbf{$-$6.1} & \textbf{30.6} & \textbf{27.7} & \textbf{$-$2.9} % Provenance: train job 1516604 (LdomEucl), eval job 1518384
+\\
+Id.-slice + domain triplet                                  & dom-proto.  & 37.8 & 37.8 & {$+$0.0} & 38.9 & 39.1 & {$+$0.2} % Provenance: train job 1517230, eval job 1518384
+\\
+Id.-slice + dom.\ triplet (no $\mathcal{L}_\mathrm{dom}$) & res. & 33.6 & 33.6 & {$+$0.0} & 35.0 & 34.7 & {$-$0.3} % Provenance: train job 1517230, eval job 1518384
+\\
+Id.-slice + cam.\ xDom contrast.                          & res. & 42.8 & 42.8 & {$+$0.0} & 43.4 & 43.4 & {$+$0.0} % Provenance: train job 1517230, eval job 1518384
+\\
+Id.-slice + $\mathcal{L}_{\mathrm{dcc}}$                                  & res. & 43.8 & 43.8 & {$+$0.0} & 42.9 & 42.9 & {$+$0.0} % Provenance: train job 1517230, eval job 1518384
+\\
+Unified Finsler                          & res. & 43.4 & 43.4 & {$+$0.0} & 43.9 & 43.5 & {$-$0.4} % Provenance: train job 1516604 (LdomEucl), eval job 1518384
+\\
+\bottomrule
+\end{tabular}%
+}
+% NOTE: domain triplet only (ED training) DeltamAP = -6.1 is the key diagnostic for drift suppression.
+%       All other arms show |Delta| <= 0.4 pp, consistent with Table A (FD training).
+%TODO: author confirms \textbf{} method row before submission
+\end{table*}
+
+% ============================================================
+% New Supplementary Sections: design details offloaded from main text
+% ============================================================
+
+\section{Domain-prototype drift head: full architecture} \label{sec:suppl_domain_proto_head}
+The domain-prototype drift head ($\omega_{\mathrm{dom}}$ in eq.~\ref{eq:domain_drift_decomposition}) routes drift through a learnable prototype table as follows. Let $\mathbf{e}_s\in\mathbb{R}^{d_e}$ ($d_e{=}64$) be learnable embeddings for each of $S$ source domains, $W_c$ the weight matrix of the domain classifier, and $P\in\mathbb{R}^{d_e\times d_\omega}$ a linear projection. The domain prior is:
+\begin{equation}
+    \omega_{\mathrm{dom}}(\mathbf{x}) = g\!\bigl(\mathbf{z}^{\mathrm{BN}}(\mathbf{x})\bigr) \odot P\!\left(\sum_{s=1}^{S} p_s(\mathbf{x})\,\mathbf{e}_s\right) ,
+    \label{eq:domain_prior}
+\end{equation}
+where $p_s = \mathrm{softmax}(W_c\,\mathrm{sg}[\mathbf{z}^{\mathrm{BN}}])_s$ are soft domain probabilities from a classifier on the stop-gradient post-BN identity feature $\mathbf{z}^{\mathrm{BN}}$ (not the $\ell_2$-normalized $\hat{\mathbf{z}}^{\mathrm{id}}$), and $g(\cdot) = \sigma(\cdot) \in \mathbb{R}^{d_\omega}$ is a sigmoid gate applied to $\mathbf{z}^{\mathrm{BN}}$ via a linear layer. At \emph{training} time, $p_s$ is replaced by the one-hot encoding of the known source-domain label $d_i$; the soft-probability path activates at inference when no domain label is supplied.
+
+The gate $g$ multiplies $P\bigl(\sum_s p_s\,\mathbf{e}_s\bigr)$ elementwise, modulating how much of the domain prototype is expressed for the current sample. The auxiliary loss $\mathcal{L}_{\mathrm{dom\text{-}tok}} = \mathrm{CrossEntropy}\bigl(W_c\,\mathrm{sg}[\mathbf{z}^{\mathrm{BN}}],\, d_i\bigr)$ trains the classifier without gradients flowing into the identity backbone through this path.
+
+\section{Bidirectional Finsler triplet} \label{sec:suppl_bidirectional_triplet}
+The formulation and primary-recipe role of $\mathcal{L}_{\mathrm{tri}}^{\mathrm{bi}}$ are presented in Sec.~\ref{subsec:training_objective} (eq.~\ref{eq:bidirectional_triplet}). In earlier ablation arms without $\mathcal{L}_{\mathrm{dcc}}$, bidirectional mining did not produce consistent gains (Table~\ref{tab:aux_loss_sweep}, Arms~0, 3, 4). The benefit emerges when combined with cross-camera drift coherence regularization: Arm~1b (unified + bidir + $\mathcal{L}_{\mathrm{dcc}}$) aligns with the best sweep row and the protocol-matched rerun in Table~\ref{tab:template_multiprotocol_bau}.
+
+\section{Same-camera drift attraction} \label{sec:suppl_sca}
+The same-camera drift attraction loss encourages drift vectors within the same camera to align, encoding the hypothesis that camera-specific domain artifacts should produce similar drift:
+\begin{equation}
+    \mathcal{L}_{\mathrm{sca}} = \frac{1}{|\mathcal{C}_{\mathrm{sca}}|}\sum_{(i,j)\in\mathcal{C}_{\mathrm{sca}}} \|\omega_i - \omega_j\|_2^2 \;,
+    \label{eq:sca}
+\end{equation}
+where $\mathcal{C}_{\mathrm{sca}} = \{(i,j): c_i=c_j,\, i\neq j\}$. This is a complementary inductive bias to $\mathcal{L}_{\mathrm{dcc}}$ (eq.~\ref{eq:loss_dcc}): where $\mathcal{L}_{\mathrm{dcc}}$ reduces cross-camera drift variance for the same identity, $\mathcal{L}_{\mathrm{sca}}$ promotes same-camera drift clustering. The auxiliary-loss sweep (Table~\ref{tab:aux_loss_sweep}) shows neither ordering nor combination of $\mathcal{L}_{\mathrm{dcc}}$ and $\mathcal{L}_{\mathrm{sca}}$ consistently outperforms $\mathcal{L}_{\mathrm{dcc}}$ alone; $\mathcal{L}_{\mathrm{sca}}$ is not included in the primary recipe.
+
+\section{Asymmetric domain triplet: formulation and failure analysis} \label{sec:suppl_domain_triplet}
+The camera-mined domain triplet $\mathcal{L}_{\mathrm{tri}}^{\mathrm{dom}}$ is defined in the main text (eq.~\ref{eq:domain_triplet}). It was tested in three configurations (domain triplet only, identity-sliced + domain triplet, and unified + bidirectional + domain triplet at weight 1.0). In all cases it produced mAP regressions of $-7.5\%$ to $-9.5\%$ relative to the respective baseline (Table~\ref{tab:aux_loss_sweep}, Arm~5 and rows H1--H5). The regression is consistent with the objective interference mechanism described in Sec.~\ref{subsec:interference_analysis}. Under Euclidean-domain training (Supp.~Table~B), the domain-triplet-only arm also collapses under Finsler evaluation ($\Delta\mathrm{mAP}{=}{-}6.1$), confirming that the Euclidean domain loss suppresses the drift vector when combined with camera-mined asymmetric triplets. $\mathcal{L}_{\mathrm{tri}}^{\mathrm{dom}}$ is not used in the primary recipe.
+
+
+\section{Monotonicity-loss ablation: \texorpdfstring{$\lambda\!=\!0$}{lambda=0} control} \label{sec:suppl_m2b_ablation}
+This section presents results for the disabled-loss control of the toy study (Sec.~\ref{subsec:controlled_corruption}). The setup is identical to the trained variant (frozen M+MS+CS-pretrained backbone, linear scalar head $\theta$, 20 training epochs) except that $\mathcal{L}_{\mathrm{mono}}$ (eq.~\ref{eq:l_mono}) is disabled; $\theta$ receives no gradient throughout training.
+
+\paragraph{Results.}
+The scalar standard deviation $\theta_{\mathrm{std}}$ remains zero throughout all 20 training epochs, confirming no gradient reaches $\theta$. On the balanced bidirectional protocol, the Randers gap $d_R(z^0,z^k)-d_R(z^k,z^0)$ is identically zero at all $\alpha\!\in\!\{0.1,0.3,0.5,0.9\}$ and all severity levels $\sigma\!\in\!\{1,2,3,4\}$. mAP is identical to Euclidean ranking for all $\alpha$ and all $k$, consistent with $\theta\!\equiv\!\mathrm{const}$ making the Randers correction direction-neutral.
+
+\begin{table}[h]
+  \centering
+  \caption{Disabled-loss control: balanced bidirectional mAP and Randers gap. Configuration identical to the trained variant, except $\mathcal{L}_{\mathrm{mono}}$ is disabled ($\lambda\!=\!0$). All Randers $\alpha$ values produce identical results to Euclidean ($\Delta\!=\!+0.018$, gap~$=\!0$).}
+  \label{tab:toy_ablation}
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lcrr}
+    \toprule
+    $\alpha$ & mean $\Delta$ ($k{=}1$--$4$) & Randers gap ($\alpha{=}0.9$) \\
+    \midrule
+    0 (Euclidean) & $+0.018$ & --- \\
+    0.1           & $+0.018$ & $0$ \\
+    0.3           & $+0.018$ & $0$ \\
+    0.5           & $+0.018$ & $0$ \\
+    0.9           & $+0.018$ & $0$ \\
+    \bottomrule
+  \end{tabular}%
+  }
+\end{table}
+
+\paragraph{Interpretation.}
+This control establishes $\mathcal{L}_{\mathrm{mono}}$ as the causal mechanism for both the severity-monotone scalar and the nonzero Randers gap in the trained variant: without it, $\theta$ encodes no severity information, Randers retrieval degenerates to Euclidean, and mAP is unchanged across all $\alpha$. The mean $\Delta$ of $+0.018$ (vs.\ $+0.099$ for the Euclidean baseline) is attributable to BatchNorm running-statistic drift during the 20 training epochs; within-model comparisons (trained variant Euclidean vs.\ Randers) remain clean.
+

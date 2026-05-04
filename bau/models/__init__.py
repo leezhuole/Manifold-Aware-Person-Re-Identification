@@ -3,8 +3,17 @@ from __future__ import absolute_import
 from .model import *
 from .memory import *
 
+def toy_resnet50(**kwargs):
+    """ResNet-50 with θ head for ToyCorruption / L_mono experiments (PLAN.md Step 7)."""
+    kwargs.setdefault('with_theta_head', True)
+    kwargs.setdefault('num_classes', 0)
+    kwargs.setdefault('pretrained', True)
+    return resnet50(**kwargs)
+
+
 __factory = {
     'resnet50': resnet50,
+    'toy_resnet50': toy_resnet50,
     'mobilenetv2': mobilenetv2,
     'vitbase': vit_base_patch16,
 }
